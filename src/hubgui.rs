@@ -37,12 +37,17 @@ pub fn run_gui() -> u32 {
 // i want to have an actual snesor name on the button that is changable
 // but also keep the current use of BDAddr since that is easy
 
+/// Connected Sensor
+///
+/// Represents one connected sensor with device address and name
 #[derive(Clone, Debug)]
 struct ConnectedSensor {
     addr: BDAddr,
     name: String,
 }
 
+/// compare by name, could be useful when allowing the user to rename sensors
+/// (although, tbh, the name is representative only, so it does not matter and mutiple sensors *could* have the same name)
 impl PartialEq for ConnectedSensor {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
@@ -50,6 +55,10 @@ impl PartialEq for ConnectedSensor {
 }
 
 impl ConnectedSensor {
+
+    /// Get and/or set the name
+    /// If a new name is provided, it is set for the sensor
+    /// Either way, the current name is returned
     pub fn name(&mut self, new: Option<String>) -> String {
         match new {
             None => (),
@@ -60,16 +69,20 @@ impl ConnectedSensor {
         self.name.clone()
     }
 
+    /// Get the sensor's address
     pub fn addr(&self) -> BDAddr {
         self.addr
     }
 }
 
+/// Measurement GUI
 struct MeasureApp {
     rx: Receiver<EventMsg>,
     tx: Sender<HubMsg>,
     sensors: Vec<ConnectedSensor>,
     _handle: JoinHandle<u32>,
+
+    searching: bool,
 }
 
 impl MeasureApp {
@@ -86,11 +99,13 @@ impl MeasureApp {
             rx: gui_rx,
             sensors: Vec::<ConnectedSensor>::new(),
             _handle: mgr_handle,
+            searching: false,
         }
     }
 
     fn find_sensors(&mut self) {
         log::info!("looking for sensors");
+        self.searching = true;
         self.tx.send(HubMsg::FindSensors).unwrap();
     }
 
@@ -122,9 +137,14 @@ impl MeasureApp {
                         log::info!("Device Discovered: {addr:?}");
                         self.tx.send(HubMsg::Connect(addr)).unwrap();
                     },
+                    EventMsg::SearchFailed => {
+                        log::info!("Failed to find any sensors");
+                        self.searching = false;
+                    }
                     EventMsg::DeviceConnected(addr) => {
                         log::info!("Device Connected: {addr:?}");
-                        self.sensors.push(ConnectedSensor {addr: addr, name: format!("Sensor {:?}", self.sensors.len())});
+                        self.sensors.push(ConnectedSensor {addr: addr, name: format!("Sensor {:?}", self.sensors.len()+1)});
+                        self.searching = false;
                     },
                     EventMsg::DeviceDisconnected(addr) => {
                         log::info!("Device Disconnected: {addr:?}");
@@ -154,8 +174,14 @@ impl eframe::App for MeasureApp {
 
             // TODO: feedback to user (search running, not running etc)
             // this means, that peripheral_mgr must report back after searching
-            if ui.button("Find Sensors").clicked() {
-                self.find_sensors();
+            if !self.searching {
+                if ui.add(egui::Button::new("Find Sensors")).clicked() {
+                    self.find_sensors();
+                }
+            } else {
+                if ui.add_enabled(false, egui::Button::new("Find Sensors")).clicked() {
+                    unreachable!();
+                }
             }
 
             // one button for each connected sensor

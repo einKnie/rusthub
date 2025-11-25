@@ -69,6 +69,7 @@ pub mod peripheral {
         DeviceConnected(BDAddr),
         DeviceDisconnected(BDAddr),
         ServiceDiscovered(BDAddr),
+        SearchFailed,
     }
 
     /// Hub Message
@@ -244,7 +245,7 @@ pub mod peripheral {
         }
 
         /// Initialize
-        /// 
+        ///
         /// Establishes connection to bluetooth stack.
         /// This function *must* be called before any other operation can be carried out
         pub async fn init(&mut self) -> Result<(), PeripheralError> {
@@ -269,9 +270,10 @@ pub mod peripheral {
         }
 
         /// Find all SensorPeripherals
-        /// 
+        ///
         /// Check all bluetooth peripherals. If one matches with our spec, then connect to it and add to vector
         pub async fn find_sensors(&mut self) -> Result<(), PeripheralError> {
+            let prevlen = self.sensors.len();
 
             for p in self.central.as_ref().unwrap().peripherals().await.unwrap() {
                 if p.properties()
@@ -301,17 +303,17 @@ pub mod peripheral {
                 }
             }
 
-            match self.sensors.len() {
-                0 => {
-                    log::debug!("no peripheral found");
-                    Err(PeripheralError::NoPeripheral)
-                },
-                _ => Ok(())
+            if self.sensors.len() == prevlen {
+                log::debug!("no peripheral found");
+                Err(PeripheralError::NoPeripheral)
+            } else {
+                log::debug!("found a new sensor!");
+                Ok(())
             }
         }
 
         /// Find Peripheral from address
-        /// 
+        ///
         /// Return a SensorPeripheral with the given address, if found
         pub async fn find_sensor(&mut self, addr: BDAddr) -> Result<SensorPeripheral, PeripheralError> {
             let mut found = Vec::<Peripheral>::new();
@@ -563,6 +565,7 @@ pub mod peripheral {
                         log::info!("looking for sensors");
                         if self.find_sensors().await.is_err() {
                             log::warn!("Finding Sensors failed");
+                            self.tx.send(EventMsg::SearchFailed).unwrap();
                         }
                     },
                     Ok(HubMsg::Connect(addr)) => {
