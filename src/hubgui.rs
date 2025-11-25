@@ -1,13 +1,13 @@
 //! TODO
 //! - close button
 //!    - handle mgr disconnect and close gracefully
-//! - improve everything (gui-wise; don't do everything in update, have some memeber variables etc...)
+//! - improve everything (gui-wise; don't do everything in update, have some memeber variables etc...) => actually, apparently this is not how egui is supposed to work (see "immediate mode gui" vs "retained mode gui")
 
 use eframe::egui;
 use btleplug::api::BDAddr;
 use crossbeam_channel::{bounded, Sender, Receiver, TryRecvError};
 use tokio::task::JoinHandle;
-use crate::peripheral_mgr::peripheral::{PeripheralMgr, HubMsg, EventMsg};
+use crate::peripheral_mgr::peripheral::{HubMsg, EventMsg};
 use crate::peripheral_mgr::peripheral;
 
 /// Run the measurent GUI
@@ -33,10 +33,42 @@ pub fn run_gui() -> u32 {
     0
 }
 
+// todo:
+// i want to have an actual snesor name on the button that is changable
+// but also keep the current use of BDAddr since that is easy
+
+#[derive(Clone, Debug)]
+struct ConnectedSensor {
+    addr: BDAddr,
+    name: String,
+}
+
+impl PartialEq for ConnectedSensor {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl ConnectedSensor {
+    pub fn name(&mut self, new: Option<String>) -> String {
+        match new {
+            None => (),
+            Some(new_name) => {
+                self.name = new_name
+            }
+        };
+        self.name.clone()
+    }
+
+    pub fn addr(&self) -> BDAddr {
+        self.addr
+    }
+}
+
 struct MeasureApp {
     rx: Receiver<EventMsg>,
     tx: Sender<HubMsg>,
-    sensors: Vec<BDAddr>,
+    sensors: Vec<ConnectedSensor>,
     _handle: JoinHandle<u32>,
 }
 
@@ -52,7 +84,7 @@ impl MeasureApp {
         Self {
             tx: gui_tx,
             rx: gui_rx,
-            sensors: Vec::<BDAddr>::new(),
+            sensors: Vec::<ConnectedSensor>::new(),
             _handle: mgr_handle,
         }
     }
@@ -67,7 +99,19 @@ impl MeasureApp {
         self.tx.send(HubMsg::Blink(addr)).unwrap();
     }
 
+    fn cleanup_and_exit(&self, ctx: egui::Context) {
+        // fire-and-forget, since we can't await the handle here
+        // and this is good enough for now (sorry)
+        self.tx.send(HubMsg::StopThread).unwrap();
+
+        // works (https://github.com/emilk/egui/discussions/4103#discussioncomment-9225022)
+        std::thread::spawn(move || {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        });
+    }
+
     // non-blocking to be run inside frame update
+    // @todo: is there another way i could do this? or is this fine?
     fn run(&mut self) -> i8 {
 
         match self.rx.try_recv() {
@@ -80,12 +124,11 @@ impl MeasureApp {
                     },
                     EventMsg::DeviceConnected(addr) => {
                         log::info!("Device Connected: {addr:?}");
-                        self.sensors.push(addr);
+                        self.sensors.push(ConnectedSensor {addr: addr, name: format!("Sensor {:?}", self.sensors.len())});
                     },
                     EventMsg::DeviceDisconnected(addr) => {
-                        // for testing; let's stop the thread if a device disconnects
                         log::info!("Device Disconnected: {addr:?}");
-                        let removed = self.sensors.extract_if(.., |x| *x == addr).collect::<Vec<_>>();
+                        let removed = self.sensors.extract_if(.., |x| x.addr() == addr).collect::<Vec<_>>();
                         log::info!("Removed from UI: {removed:?}");
                     },
                     EventMsg::ServiceDiscovered(addr) => log::info!("Found Moisture LED service: {addr:?}"), // does nothing: i think b/c the sensor does not advertise; i guess i have to add that lol
@@ -109,15 +152,23 @@ impl eframe::App for MeasureApp {
                 log::warn!("disconnected from thread, should stop");
             }
 
+            // TODO: feedback to user (search running, not running etc)
+            // this means, that peripheral_mgr must report back after searching
             if ui.button("Find Sensors").clicked() {
                 self.find_sensors();
             }
 
             // one button for each connected sensor
-            for addr in self.sensors.clone() {
-                if ui.button(addr.to_string()).clicked() {
-                    self.blink(addr);
+            for mut s in self.sensors.clone() {
+                if ui.button(s.name(None)).clicked() {
+                    self.blink(s.addr);
                 }
+            }
+
+            // exit
+            if ui.button("Close App").clicked() {
+                log::info!("Closing app. Byebye!");
+                self.cleanup_and_exit(ctx.clone());
             }
 
         });
