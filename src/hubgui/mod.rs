@@ -8,6 +8,7 @@ use btleplug::api::BDAddr;
 use crossbeam_channel::{bounded, Sender, Receiver, TryRecvError};
 use tokio::task::JoinHandle;
 use crate::peripheral_mgr::peripheral::{PeripheralMgr, HubMsg, EventMsg};
+use crate::peripheral_mgr::peripheral;
 
 /// Run the measurent GUI
 /// 
@@ -27,20 +28,7 @@ pub fn run_gui() -> u32 {
             Ok(Box::<MeasureApp>::new(MeasureApp::new()))
         }),
     ).is_err() {
-        println!("GUI ended with error");
-    }
-    0
-}
-
-/// Run the Peripheral Manager
-/// 
-/// Init and run the Mgr; this should be run as a separate thread
-async fn mgr_run(tx: Sender<EventMsg>, rx: Receiver<HubMsg>) -> u32 {
-    // init the manager
-    let mut mgr = PeripheralMgr::new();
-    if mgr.init().await.is_ok() {
-        println!("Peripheral Manager initialized!");
-        mgr.run(tx, rx).await;
+        log::error!("GUI ended with error");
     }
     0
 }
@@ -59,13 +47,13 @@ impl MeasureApp {
         let (gui_tx, thread_rx) = bounded(4);
         let (thread_tx, gui_rx) = bounded(4);
 
-        let mgr_handle = tokio::spawn(mgr_run(thread_tx, thread_rx));
+        let mgr_handle = tokio::spawn(peripheral::mgr_run(thread_tx, thread_rx));
 
         Self {
             tx: gui_tx,
             rx: gui_rx,
             sensors: Vec::<BDAddr>::new(),
-            _handle: mgr_handle
+            _handle: mgr_handle,
         }
     }
 

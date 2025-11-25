@@ -199,6 +199,20 @@ pub mod peripheral {
     }
 
 
+    /// Run the Peripheral Manager
+    ///
+    /// Init and run the Mgr; this should be run as a separate thread
+    pub async fn mgr_run(tx: Sender<EventMsg>, rx: Receiver<HubMsg>) -> u32 {
+        // init the manager
+        let mut mgr = PeripheralMgr::new(tx, rx);
+        if mgr.init().await.is_ok() {
+            log::info!("Peripheral Manager initialized!");
+            mgr.run().await;
+        }
+        0
+    }
+
+
     /// Peripheral Manager
     /// 
     /// Manager for Peripheral devices
@@ -207,6 +221,9 @@ pub mod peripheral {
     pub struct PeripheralMgr {
         central: Option<Adapter>,
         sensors: Vec<SensorPeripheral>,
+
+        tx: Sender<EventMsg>,
+        rx: Receiver<HubMsg>,
     }
 
     impl std::fmt::Display for PeripheralMgr {
@@ -215,18 +232,14 @@ pub mod peripheral {
         }
     }
 
-    impl Default for PeripheralMgr {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
     impl PeripheralMgr {
 
-        pub fn new() -> Self {
+        pub fn new( tx: Sender<EventMsg>, rx: Receiver<HubMsg>) -> Self {
             Self {
                 central: None,
                 sensors: Vec::<SensorPeripheral>::new(),
+                tx,
+                rx
             }
         }
 
@@ -431,7 +444,7 @@ pub mod peripheral {
         /// 
         /// Run the PeripheralMgr loop.
         /// 
-        pub async fn run(&mut self, tx: Sender<EventMsg>, rx: Receiver<HubMsg>) -> u32 {
+        pub async fn run(&mut self) -> u32 {
 
             let central_state = match self.central.as_ref().unwrap().adapter_state().await {
                 Ok(s) => s,
@@ -474,7 +487,7 @@ pub mod peripheral {
                             // we only care about our sensor here
                             if name.contains("MoistureSensor") {
                                 log::info!("DeviceDiscovered: {:?} {}", addr, name);
-                                tx.send(EventMsg::DeviceDiscovered(addr)).unwrap();
+                                self.tx.send(EventMsg::DeviceDiscovered(addr)).unwrap();
                             }
                         },
                         CentralEvent::StateUpdate(state) => {
@@ -492,7 +505,7 @@ pub mod peripheral {
                             // we only care about our sensor here
                             if name.contains("MoistureSensor") {
                                 log::info!("DeviceConnected: {:?} {}", addr, name);
-                                tx.send(EventMsg::DeviceConnected(addr)).unwrap();
+                                self.tx.send(EventMsg::DeviceConnected(addr)).unwrap();
                             }
                         },
                         CentralEvent::DeviceDisconnected(id) => {
@@ -507,7 +520,7 @@ pub mod peripheral {
                             // we only care about our sensor here
                             if name.contains("MoistureSensor") {
                                 log::info!("DeviceDisconnected: {:?} {}", addr, name);
-                                tx.send(EventMsg::DeviceDisconnected(addr)).unwrap();
+                                self.tx.send(EventMsg::DeviceDisconnected(addr)).unwrap();
                             }
                         },
                         CentralEvent::ServicesAdvertisement { id, services } => {
@@ -517,7 +530,7 @@ pub mod peripheral {
                                 let properties = peripheral.properties().await.unwrap();
                                 let addr = properties.unwrap().address;
                                 log::info!("ServicesAdvertisement: {:?}, {:?}", id, services);
-                                tx.send(EventMsg::ServiceDiscovered(addr)).unwrap();
+                                self.tx.send(EventMsg::ServiceDiscovered(addr)).unwrap();
                             }
                         },
                         // let's ignore other events for now
@@ -526,7 +539,7 @@ pub mod peripheral {
                 }
 
                 // now let's check if something came in from main
-                match rx.try_recv() {
+                match self.rx.try_recv() {
                     Ok(HubMsg::StopThread) => {
                         log::info!("received stop command from main");
                         break;
