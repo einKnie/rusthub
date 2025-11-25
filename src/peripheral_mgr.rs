@@ -390,7 +390,7 @@ pub mod peripheral {
             for mut p in self.sensors.clone() {
                 dbg!(&p);
                 if self.blinky(&mut p).await.is_err() {
-                    println!("Failed to blink Peripheral ({:?})", p.addr());
+                    log::warn!("Failed to blink Peripheral ({:?})", p.addr());
                 }
             }
             Ok(())
@@ -436,11 +436,11 @@ pub mod peripheral {
             let central_state = match self.central.as_ref().unwrap().adapter_state().await {
                 Ok(s) => s,
                 Err(_) => {
-                    println!("could not get central state!");
+                    log::error!("could not get central state!");
                     return 0;
                 }
             };
-            println!("CentralState: {:?}", central_state);
+            log::info!("CentralState: {:?}", central_state);
 
             // Each adapter has an event stream, we fetch via events(),
             // simplifying the type, this will return what is essentially a
@@ -448,7 +448,7 @@ pub mod peripheral {
             let mut events = match self.central.as_ref().unwrap().events().await {
                 Ok(ev) => ev,
                 Err(_) => {
-                    println!("could not get central events!");
+                    log::error!("could not get central events!");
                     return 0;
                 }
             };
@@ -456,8 +456,7 @@ pub mod peripheral {
             // start scanning for devices
             self.central.as_ref().unwrap().start_scan(ScanFilter::default()).await.unwrap();
 
-            println!("event handler intialized!");
-
+            log::info!("event handler intialized!");
 
             loop {
                 // check for an event  - with timeout making this non-blocking
@@ -474,12 +473,12 @@ pub mod peripheral {
                                 .unwrap_or_default();
                             // we only care about our sensor here
                             if name.contains("MoistureSensor") {
-                                println!("DeviceDiscovered: {:?} {}", addr, name);
+                                log::info!("DeviceDiscovered: {:?} {}", addr, name);
                                 tx.send(EventMsg::DeviceDiscovered(addr)).unwrap();
                             }
                         },
                         CentralEvent::StateUpdate(state) => {
-                            println!("AdapterStatusUpdate {:?}", state);
+                            log::info!("AdapterStatusUpdate {:?}", state);
                         },
                         CentralEvent::DeviceConnected(id) => {
                             let peripheral = self.central.as_ref().unwrap().peripheral(&id).await.unwrap();
@@ -492,7 +491,7 @@ pub mod peripheral {
                                 .unwrap_or_default();
                             // we only care about our sensor here
                             if name.contains("MoistureSensor") {
-                                println!("DeviceConnected: {:?} {}", addr, name);
+                                log::info!("DeviceConnected: {:?} {}", addr, name);
                                 tx.send(EventMsg::DeviceConnected(addr)).unwrap();
                             }
                         },
@@ -507,7 +506,7 @@ pub mod peripheral {
                                 .unwrap_or_default();
                             // we only care about our sensor here
                             if name.contains("MoistureSensor") {
-                                println!("DeviceDisconnected: {:?} {}", addr, name);
+                                log::info!("DeviceDisconnected: {:?} {}", addr, name);
                                 tx.send(EventMsg::DeviceDisconnected(addr)).unwrap();
                             }
                         },
@@ -517,72 +516,57 @@ pub mod peripheral {
                                 let peripheral = self.central.as_ref().unwrap().peripheral(&id).await.unwrap();
                                 let properties = peripheral.properties().await.unwrap();
                                 let addr = properties.unwrap().address;
-                                println!("ServicesAdvertisement: {:?}, {:?}", id, services);
+                                log::info!("ServicesAdvertisement: {:?}, {:?}", id, services);
                                 tx.send(EventMsg::ServiceDiscovered(addr)).unwrap();
                             }
                         },
-                        // let's ignore these other events for now
+                        // let's ignore other events for now
                         _ => ()
-                        // CentralEvent::DeviceUpdated(id) => {
-                        //     println!("DeviceUpdated: {:?}", id);
-                        // },
-                        // CentralEvent::ManufacturerDataAdvertisement {
-                        //     id,
-                        //     manufacturer_data,
-                        // } => {
-                        //      println!(
-                        //          "ManufacturerDataAdvertisement: {:?}, {:?}",
-                        //          id, manufacturer_data
-                        //      );
-                        // },
-                        // CentralEvent::ServiceDataAdvertisement { id, service_data } => {
-                        //     println!("ServiceDataAdvertisement: {:?}, {:?}", id, service_data);
-                        // },
                     }
                 }
 
                 // now let's check if something came in from main
                 match rx.try_recv() {
                     Ok(HubMsg::StopThread) => {
-                        println!("received stop command from main");
+                        log::info!("received stop command from main");
                         break;
                     },
                     Ok(HubMsg::Ping) => {
-                        println!("received Ping from main");
+                        log::info!("received Ping from main");
                     }
                     Ok(HubMsg::BlinkAll) => {
-                        println!("blinking all sensors");
+                        log::info!("blinking all sensors");
                         if self.blinky_all().await.is_err() {
-                            println!("BlinkAll failed");
+                            log::warn!("BlinkAll failed");
                         }
                     },
                     Ok(HubMsg::Blink(addr)) => {
-                        println!("blinking led on peripheral ({addr:?})");
+                        log::info!("blinking led on peripheral ({addr:?})");
                         if self.blink(addr).await.is_err() {
-                            println!("Blink failed for {addr:?}");
+                            log::warn!("Blink failed for {addr:?}");
                         }
                     },
                     Ok(HubMsg::FindSensors) => {
-                        println!("looking for sensors");
+                        log::info!("looking for sensors");
                         if self.find_sensors().await.is_err() {
-                            println!("Finding Sensors failed");
+                            log::warn!("Finding Sensors failed");
                         }
                     },
                     Ok(HubMsg::Connect(addr)) => {
-                        println!("connecting to peripheral ({addr:?})");
+                        log::info!("connecting to peripheral ({addr:?})");
                         if self.connect(addr).await.is_err() {
-                            println!("Connection failed ({addr:?})");
+                            log::warn!("Connection failed ({addr:?})");
                         }
                     },
                     Ok(HubMsg::Disconnect(addr)) => {
-                        println!("Disconnecting from peripheral ({addr:?})");
+                        log::info!("Disconnecting from peripheral ({addr:?})");
                         if self.disconnect(addr).await.is_err() {
-                            println!("Disconnect failed ({addr:?})");
+                            log::warn!("Disconnect failed ({addr:?})");
                         }
                     },
                     Err(TryRecvError::Empty) => (),
                     Err(TryRecvError::Disconnected) => {
-                        println!("disconnected from main! Stopping");
+                        log::info!("disconnected from main! Stopping");
                         break;
                     }
                 };
@@ -590,7 +574,7 @@ pub mod peripheral {
 
             // let's clean up after ourselves
             if self.central.as_ref().unwrap().stop_scan().await.is_err() {
-                println!("Failed to stop Scan");
+                log::warn!("Failed to stop Scan");
             }
             1
         }

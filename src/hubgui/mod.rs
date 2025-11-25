@@ -105,7 +105,7 @@ impl MeasureApp {
             },
             Err(TryRecvError::Empty) => (),
             Err(TryRecvError::Disconnected) => {
-                println!("disconnected from thread!");
+                log::warn!("disconnected from thread!");
                 return -1
             }
         }
@@ -118,7 +118,7 @@ impl eframe::App for MeasureApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Soil Measurement Sensor Hub");
             if self.run() < 0 {
-                println!("disconnected from thread, should stop");
+                log::warn!("disconnected from thread, should stop");
             }
 
             if ui.button("Find Sensors").clicked() {
