@@ -3,15 +3,15 @@
 //!    - handle mgr disconnect and close gracefully
 //! - improve everything (gui-wise; don't do everything in update, have some memeber variables etc...) => actually, apparently this is not how egui is supposed to work (see "immediate mode gui" vs "retained mode gui")
 
-use eframe::egui;
-use btleplug::api::BDAddr;
-use crossbeam_channel::{bounded, Sender, Receiver, TryRecvError};
-use tokio::task::JoinHandle;
-use crate::peripheral_mgr::peripheral::{HubMsg, EventMsg};
 use crate::peripheral_mgr::peripheral;
+use crate::peripheral_mgr::peripheral::{EventMsg, HubMsg};
+use btleplug::api::BDAddr;
+use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
+use eframe::egui;
+use tokio::task::JoinHandle;
 
 /// Run the measurent GUI
-/// 
+///
 /// This is basically the only thing we run from main at this point
 pub fn run_gui() -> u32 {
     let options = eframe::NativeOptions {
@@ -21,21 +21,19 @@ pub fn run_gui() -> u32 {
     if eframe::run_native(
         "Measurement Hub",
         options,
-        Box::new(|_cc| {
+        Box::new(|cc| {
             // This gives us image support:
-            //egui_extras::install_image_loaders(&cc.egui_ctx);
+            egui_extras::install_image_loaders(&cc.egui_ctx);
 
             Ok(Box::<MeasureApp>::new(MeasureApp::new()))
         }),
-    ).is_err() {
+    )
+    .is_err()
+    {
         log::error!("GUI ended with error");
     }
     0
 }
-
-// todo:
-// i want to have an actual snesor name on the button that is changable
-// but also keep the current use of BDAddr since that is easy
 
 /// Connected Sensor
 ///
@@ -44,6 +42,8 @@ pub fn run_gui() -> u32 {
 struct ConnectedSensor {
     addr: BDAddr,
     name: String,
+    value: u32,
+    subscribed: bool,
 }
 
 /// compare by name, could be useful when allowing the user to rename sensors
@@ -55,16 +55,13 @@ impl PartialEq for ConnectedSensor {
 }
 
 impl ConnectedSensor {
-
     /// Get and/or set the name
     /// If a new name is provided, it is set for the sensor
     /// Either way, the current name is returned
     pub fn name(&mut self, new: Option<String>) -> String {
         match new {
             None => (),
-            Some(new_name) => {
-                self.name = new_name
-            }
+            Some(new_name) => self.name = new_name,
         };
         self.name.clone()
     }
@@ -86,9 +83,7 @@ struct MeasureApp {
 }
 
 impl MeasureApp {
-
     pub fn new() -> Self {
-
         let (gui_tx, thread_rx) = bounded(4);
         let (thread_tx, gui_rx) = bounded(4);
 
@@ -114,6 +109,27 @@ impl MeasureApp {
         self.tx.send(HubMsg::Blink(addr)).unwrap();
     }
 
+    fn read_sensor(&mut self, addr: BDAddr) {
+        log::info!("reading from sensor");
+        self.tx.send(HubMsg::ReadFrom(addr)).unwrap();
+    }
+
+    fn subscribe(&mut self, addr: BDAddr) {
+        log::info!("subscribing to data from sensor");
+        self.tx.send(HubMsg::Subscribe(addr)).unwrap();
+    }
+
+    fn unsubscribe(&mut self, addr: BDAddr) {
+        log::info!("unsubscribing to data from sensor");
+        self.tx.send(HubMsg::Unsubscribe(addr)).unwrap();
+    }
+
+    fn disconnect_all(&mut self) {
+        for p in self.sensors.iter() {
+            self.tx.send(HubMsg::Disconnect(p.addr)).unwrap();
+        }
+    }
+
     fn cleanup_and_exit(&self, ctx: egui::Context) {
         // fire-and-forget, since we can't await the handle here
         // and this is good enough for now (sorry)
@@ -128,7 +144,6 @@ impl MeasureApp {
     // non-blocking to be run inside frame update
     // @todo: is there another way i could do this? or is this fine?
     fn run(&mut self) -> i8 {
-
         match self.rx.try_recv() {
             Ok(val) => {
                 dbg!(&val);
@@ -136,34 +151,51 @@ impl MeasureApp {
                     EventMsg::DeviceDiscovered(addr) => {
                         log::info!("Device Discovered: {addr:?}");
                         self.tx.send(HubMsg::Connect(addr)).unwrap();
-                    },
+                    }
                     EventMsg::SearchFailed => {
                         log::info!("Failed to find any sensors");
                         self.searching = false;
                     }
+                    EventMsg::NewData(addr, data) => {
+                        log::info!("received new sensor data for {addr:?}");
+                        if let Some(p) = self.sensors.iter_mut().find(|p| p.addr == addr) {
+                            p.value = data;
+                        }
+                    }
                     EventMsg::DeviceConnected(addr) => {
                         log::info!("Device Connected: {addr:?}");
-                        self.sensors.push(ConnectedSensor {addr: addr, name: format!("Sensor {:?}", self.sensors.len()+1)});
+                        self.sensors.push(ConnectedSensor {
+                            addr: addr,
+                            name: format!("Sensor {:?}", self.sensors.len() + 1),
+                            value: 0,
+                            subscribed: false,
+                        });
                         self.searching = false;
-                    },
+                    }
                     EventMsg::DeviceDisconnected(addr) => {
                         log::info!("Device Disconnected: {addr:?}");
-                        let removed = self.sensors.extract_if(.., |x| x.addr() == addr).collect::<Vec<_>>();
+                        let removed = self
+                            .sensors
+                            .extract_if(.., |x| x.addr() == addr)
+                            .collect::<Vec<_>>();
                         log::info!("Removed from UI: {removed:?}");
-                    },
-                    EventMsg::ServiceDiscovered(addr) => log::info!("Found Moisture LED service: {addr:?}"), // does nothing: i think b/c the sensor does not advertise; i guess i have to add that lol
+                    }
+                    EventMsg::ServiceDiscovered(addr) => {
+                        log::info!("Found Moisture LED service: {addr:?}")
+                    } // does nothing: i think b/c the sensor does not advertise; i guess i have to add that lol
                 };
-            },
+            }
             Err(TryRecvError::Empty) => (),
             Err(TryRecvError::Disconnected) => {
                 log::warn!("disconnected from thread!");
-                return -1
+                return -1;
             }
         }
         0
     }
 }
 
+// todo: statusbar with current messages (i.e. search failed)
 impl eframe::App for MeasureApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -172,23 +204,51 @@ impl eframe::App for MeasureApp {
                 log::warn!("disconnected from thread, should stop");
             }
 
-            // TODO: feedback to user (search running, not running etc)
-            // this means, that peripheral_mgr must report back after searching
+            // button only clickable if not currently searching
             if !self.searching {
                 if ui.add(egui::Button::new("Find Sensors")).clicked() {
                     self.find_sensors();
                 }
             } else {
-                if ui.add_enabled(false, egui::Button::new("Find Sensors")).clicked() {
+                if ui
+                    .add_enabled(false, egui::Button::new("Find Sensors"))
+                    .clicked()
+                {
                     unreachable!();
                 }
             }
 
             // one button for each connected sensor
             for mut s in self.sensors.clone() {
-                if ui.button(s.name(None)).clicked() {
+                // idea: have a 'box' per peripheral, with several buttons (read, blink, disconnect)
+                ui.add(egui::Label::new(format!("{0} ({1})", s.name, s.value)));
+                if ui.button("Read").clicked() {
+                    self.read_sensor(s.addr);
+                }
+                if ui.button("Blink").clicked() {
                     self.blink(s.addr);
                 }
+                if s.subscribed {
+                    if ui.button("Unsubscribe").clicked() {
+                        self.unsubscribe(s.addr);
+                        s.subscribed = false;
+                    }
+                } else {
+                    if ui.button("Subscribe").clicked() {
+                        self.subscribe(s.addr);
+                        s.subscribed = true; // why is this not updated?
+                    }
+                }
+
+                ui.add(egui::Separator::default());
+                // if ui.add(egui::Button::new(egui::Image::new(egui::include_image!("../data/sensor.png")))).clicked() {
+                //     // self.blink(s.addr);
+                //     self.read_sensor(s.addr);
+                // }
+            }
+
+            if ui.button("Disconnect all").clicked() {
+                self.disconnect_all();
             }
 
             // exit
@@ -197,7 +257,10 @@ impl eframe::App for MeasureApp {
                 self.cleanup_and_exit(ctx.clone());
             }
 
+            // yes, this updates the ui all the time, but this (no na) also causes cpu usage to go up
+            // so no: i want to 'manually' update the ui when a value changes
+            // ok, actually i need this, i'm stupid. the enetire msg handling loop is als run in here -.-
+            ui.ctx().request_repaint();
         });
     }
-
 }

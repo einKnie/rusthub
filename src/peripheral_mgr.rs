@@ -1,51 +1,12 @@
-pub mod error {
+pub mod sensor;
+pub mod error;
 
-    use std::error::Error;
-
-    /// Peripheral Error
-    #[derive(Debug)]
-    pub enum PeripheralError {
-        NoAdapter,
-        NoPeripheral,
-        ConnectionFailed,
-        NoCharacteristic,
-        WriteFailed,
-        ReadFailed,
-        OtherError(Box<dyn Error>),
-    }
-
-    impl std::fmt::Display for PeripheralError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                PeripheralError::NoAdapter => write!(f, "No Bluetooth adapter found"),
-                PeripheralError::NoPeripheral => write!(f, "No MoistureSensor found"),
-                PeripheralError::ConnectionFailed => write!(f, "Connection failed"),
-                PeripheralError::NoCharacteristic => write!(f, "BLE Characteristic not found on sensor device"),
-                PeripheralError::WriteFailed => write!(f, "Write failed"),
-                PeripheralError::ReadFailed => write!(f, "Read failed"),
-                PeripheralError::OtherError(e) => write!(f, "Other Error: {e}",)
-            }
-        }
-    }
-
-    impl Error for PeripheralError {}
-
-    impl PeripheralError {
-
-        /// Return a boxed instance
-        /// 
-        /// not really needed anymore
-        pub fn new_boxed(err: PeripheralError) -> Box<dyn Error> {
-            Box::new(err)
-        }
-    }
-
-}
 
 pub mod peripheral {
-    use super::error::PeripheralError;
+    use crate::peripheral_mgr::error::error::PeripheralError;
+    use crate::peripheral_mgr::sensor::sensor::{SensorPeripheral, PeripheralAction, ActionResult};
 
-    use btleplug::api::{Central, CentralEvent, Manager as _, Peripheral as _, WriteType, BDAddr, ScanFilter};
+    use btleplug::api::{Central, CentralEvent, Manager as _, Peripheral as _, BDAddr, ScanFilter};
     use btleplug::platform::{Adapter, Manager, Peripheral};
     use std::time::Duration;
     use tokio::time;
@@ -56,9 +17,10 @@ pub mod peripheral {
     /// Specific Characteristic UUID set by Sensor Peripheral
     /// for controlling the sensor LED
     const LED_CHARACTERISTIC_UUID: Uuid = uuid!("d9feb5df-b55f-44ef-b307-63893c5f67e5");
+    const SENSOR_CHARACTERISTIC_UUID: Uuid = uuid!("d9feb5df-b55f-44ef-b307-63893c5f67e6");
 
     /// Event Message
-    /// 
+    ///
     /// Sent from PeripheralMgr on bluetooth event
     /// @todo this should probably be changed to contain the peripheral id instead, since that makes more sense
     /// since we get the id automatically with the event *and* we can identify a peripheral much more easily via the id than the address
@@ -70,10 +32,11 @@ pub mod peripheral {
         DeviceDisconnected(BDAddr),
         ServiceDiscovered(BDAddr),
         SearchFailed,
+        NewData(BDAddr, u32),
     }
 
     /// Hub Message
-    /// 
+    ///
     /// Sent from main to the PeripheralMgr
     /// To be used for thread control as well as peripheral commands
     /// @todo this should be split in two enums, per usecase
@@ -85,120 +48,13 @@ pub mod peripheral {
         Ping,
         BlinkAll,
         Blink(BDAddr),
+        ReadFrom(BDAddr),
+        Subscribe(BDAddr),
+        Unsubscribe(BDAddr),
         FindSensors,
         Connect(BDAddr),
         Disconnect(BDAddr),
     }
-    
-    /// Sensor Peripheral
-    /// 
-    /// Individual Sensor Peripheral device
-    /// Represents one Sensor Peripheral
-    /// @todo should i remove this abstraction? i feel like this introduces more complexity than is necessary
-    #[derive(Debug,Clone)]
-    pub struct SensorPeripheral {
-        peripheral: Peripheral,
-        addr: BDAddr,
-        connected: bool,
-    }
-
-    impl std::fmt::Display for SensorPeripheral {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "Sensor Peripheral ({:?})", self.addr)
-        }
-    }
-
-    impl PartialEq for SensorPeripheral {
-        fn eq(&self, other: &Self) -> bool {
-            self.addr == other.addr
-        }
-    }
-
-    impl SensorPeripheral {
-        pub fn new(p: Peripheral, a: BDAddr) -> Self {
-            Self {
-                peripheral: p,
-                addr: a,
-                connected: false,
-            }
-        }
-
-        pub fn addr(self) -> BDAddr {
-            self.addr
-        }
-
-        pub fn connected(self) -> bool {
-            self.connected
-        }
-
-        /// Connect to peripheral
-        /// 
-        /// Check first if already connected
-        pub async fn connect(&mut self) -> Result<bool, PeripheralError> {
-            if self.peripheral.is_connected().await.unwrap() {
-                log::info!("already connected!");
-                return Ok(true);
-            }
-
-            match self.peripheral.connect().await {
-                Ok(_) => (),
-                Err(e) => {
-                    log::warn!("Failed to connect to sensor! {:?}", e);
-                    return Err(PeripheralError::ConnectionFailed);
-                }
-            };
-
-            log::debug!("Connected to sensor device");
-            log::debug!("Peripheral id: {:?}", self.peripheral.id());
-            log::debug!("Properties:");
-            let addr = self.peripheral.properties().await.unwrap().unwrap().address;
-            log::debug!("{:?}", addr);
-
-            self.connected = true;
-            Ok(true)
-        }
-
-        pub async fn disconnect(&mut self) -> Result<bool, PeripheralError> {
-            if !self.peripheral.is_connected().await.unwrap() {
-                log::info!("already disconnected!");
-                self.connected = false;
-                return Ok(true);
-            }
-
-            match self.peripheral.disconnect().await {
-                Ok(_) => {
-                    log::debug!("disconnected");
-                    self.connected = false;
-                    Ok(true)
-                },
-                Err(e) => {
-                    log::warn!("Failed to disconnect from sensor {:?}: {:?}", self, e);
-                    Err(PeripheralError::ConnectionFailed)
-                }
-            }
-        }
-
-        pub async fn read(self) -> Result<u32, PeripheralError> {
-            todo!("reading not yet implemented")
-        }
-
-        pub async fn write(&self, uuid: Uuid, data: [u8;1]) -> Result<(), PeripheralError> {
-            // discover services and characteristics
-            let _ = self.peripheral.discover_services().await;
-
-            let chars = self.peripheral.characteristics();
-            let cmd_char = match chars.iter().find(|c| c.uuid == uuid) {
-                None => return Err(PeripheralError::NoCharacteristic),
-                Some(char) => char.clone()
-            };
-
-            match self.peripheral.write(&cmd_char, &data, WriteType::WithResponse).await {
-                Ok(_) => Ok(()),
-                Err(_) => Err(PeripheralError::WriteFailed)
-            }
-        }
-    }
-
 
     /// Run the Peripheral Manager
     ///
@@ -215,9 +71,9 @@ pub mod peripheral {
 
 
     /// Peripheral Manager
-    /// 
+    ///
     /// Manager for Peripheral devices
-    /// 
+    ///
     #[derive(Debug,Clone)]
     pub struct PeripheralMgr {
         central: Option<Adapter>,
@@ -262,7 +118,7 @@ pub mod peripheral {
                     log::warn!("No bluetooth adapter found");
                     return Err(PeripheralError::NoAdapter);
                 }
-                    
+
                 self.central = Some(adapters.into_iter().nth(0).unwrap());
                 log::debug!("Initialized!");
             }
@@ -272,8 +128,9 @@ pub mod peripheral {
         /// Find all SensorPeripherals
         ///
         /// Check all bluetooth peripherals. If one matches with our spec, then connect to it and add to vector
-        pub async fn find_sensors(&mut self) -> Result<(), PeripheralError> {
+        async fn find_sensors(&mut self) -> Result<(), PeripheralError> {
             let prevlen = self.sensors.len();
+            log::info!("known sensors: {prevlen:?}");
 
             for p in self.central.as_ref().unwrap().peripherals().await.unwrap() {
                 if p.properties()
@@ -285,6 +142,15 @@ pub mod peripheral {
                     .any(|name| name.contains("MoistureSensor"))
                 {
                     log::debug!("found sensor device!");
+                    let addr = p.properties().await.unwrap().unwrap().address;
+
+                    match self.sensors.iter().find(|&p| p.addr == addr) {
+                        Some(_) => {
+                            log::debug!("Sensor already known!");
+                            continue;
+                        },
+                        None => (),
+                    };
 
                     match p.connect().await {
                         Ok(_) => log::debug!("connected"),
@@ -296,18 +162,16 @@ pub mod peripheral {
 
                     log::debug!("Connected to sensor device");
                     log::debug!("Peripheral id: {:?}", p.id());
-                    log::debug!("properties:");
-                    let addr = p.properties().await.unwrap().unwrap().address;
                     log::debug!("hw addr: {:?}", addr);
                     self.sensors.push(SensorPeripheral::new(p, addr));
                 }
             }
 
             if self.sensors.len() == prevlen {
-                log::debug!("no peripheral found");
+                log::debug!("no peripheral found (old len: {prevlen:?} - newlen: {:?})", self.sensors.len());
                 Err(PeripheralError::NoPeripheral)
             } else {
-                log::debug!("found a new sensor!");
+                log::debug!("found a new sensor! (old len: {prevlen:?} - newlen: {:?})", self.sensors.len());
                 Ok(())
             }
         }
@@ -315,7 +179,7 @@ pub mod peripheral {
         /// Find Peripheral from address
         ///
         /// Return a SensorPeripheral with the given address, if found
-        pub async fn find_sensor(&mut self, addr: BDAddr) -> Result<SensorPeripheral, PeripheralError> {
+        async fn find_sensor(&mut self, addr: BDAddr) -> Result<SensorPeripheral, PeripheralError> {
             let mut found = Vec::<Peripheral>::new();
 
             for p in self.central.as_ref().unwrap().peripherals().await.unwrap() {
@@ -347,48 +211,35 @@ pub mod peripheral {
         }
 
         /// Connect Peripheral
-        /// 
+        ///
         /// Connect to a Peripheral with the given address
         /// If the Peripheral is not known yet, find it and add it to the list as well
         /// @todo check if this even works, when i want to later address a peripheral added to the list here
-        pub async fn connect(&mut self, addr: BDAddr) -> Result<(), PeripheralError> {
+        async fn connect(&mut self, addr: BDAddr) -> Result<(), PeripheralError> {
             let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
                 Some(p) => p.clone(),
                 None => {
-                    match self.find_sensor(addr).await {
-                        Ok(p) => {
-                            self.sensors.push(p.clone());
-                            p
-                        },
-                        Err(e) => {
-                            return Err(e);
-                        }
-                    }
+                    return Err(PeripheralError::NoPeripheral);
                 }
             };
             match p.connect().await {
                 Ok(true) => Ok(()),
                 Ok(false) => Err(PeripheralError::ConnectionFailed),
-                Err(e) => Err(e)
+                Err(e) => {
+                    log::debug!("connection failed: {e:?}");
+                    Err(e)
+                }
             }
         }
 
         /// Disconnect Peripheral
-        /// 
+        ///
         /// disconnect from a Peripheral with the given address
-        pub async fn disconnect(&mut self, addr: BDAddr) -> Result<(), PeripheralError> {
+        async fn disconnect(&mut self, addr: BDAddr) -> Result<(), PeripheralError> {
             let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
                 Some(p) => p.clone(),
                 None => {
-                    match self.find_sensor(addr).await {
-                        Ok(p) => {
-                            self.sensors.push(p.clone());
-                            p
-                        },
-                        Err(e) => {
-                            return Err(e);
-                        }
-                    }
+                    return Err(PeripheralError::NoPeripheral);
                 }
             };
             match p.disconnect().await {
@@ -399,12 +250,12 @@ pub mod peripheral {
         }
 
         /// Blink all SensorPeripherals
-        /// 
+        ///
         /// Perform the Blink routine on all known SensorPeripherals, sequentially
-        pub async fn blinky_all(&mut self) -> Result<(), PeripheralError> {
+        async fn blinky_all(&mut self) -> Result<(), PeripheralError> {
             for mut p in self.sensors.clone() {
                 dbg!(&p);
-                if self.blinky(&mut p).await.is_err() {
+                if self.blink_sensor(&mut p).await.is_err() {
                     log::warn!("Failed to blink Peripheral ({:?})", p.addr());
                 }
             }
@@ -412,23 +263,23 @@ pub mod peripheral {
         }
 
         /// Blink a Peripheral with given address
-        /// 
+        ///
         /// Perform the Blink routine on a Peripheral with address *addr*
         /// This can fail if no peripheral with the given address is found
-        pub async fn blink(&self, addr: BDAddr) -> Result<(), PeripheralError> {
+        async fn blink(&self, addr: BDAddr) -> Result<(), PeripheralError> {
             let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
                 Some(p) => p.clone(),
                 None => {
                     return Err(PeripheralError::NoPeripheral);
                 }
             };
-            self.blinky(&mut p).await
+            self.blink_sensor(&mut p).await
         }
 
         /// Blink a given SensorPeripheral
-        /// 
+        ///
         /// Perform the Blink routine on a connected SensorPeripheral
-        async fn blinky(&self, p: &mut SensorPeripheral) -> Result<(), PeripheralError> {
+        async fn blink_sensor(&self, p: &mut SensorPeripheral) -> Result<(), PeripheralError> {
 
             for i in 0..21 {
                 let led_cmd: [u8;1] = match i%2 {
@@ -436,16 +287,88 @@ pub mod peripheral {
                     _ => [1]
                 };
                 log::debug!("writing: {:?}", led_cmd);
-                p.write(LED_CHARACTERISTIC_UUID, led_cmd).await?;
+                p.do_action(LED_CHARACTERISTIC_UUID, PeripheralAction::Write(led_cmd)).await?;
                 time::sleep(Duration::from_millis(200)).await;
             }
             Ok(())
         }
 
+        /// Read from a Peripheral with given address
+        ///
+        /// Read sensor data from a Peripheral with address *addr*
+        /// This can fail if no peripheral with the given address is found
+        async fn read(&self, addr: BDAddr) -> Result<u32, PeripheralError> {
+            let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
+                Some(p) => p.clone(),
+                None => {
+                    return Err(PeripheralError::NoPeripheral);
+                }
+            };
+            log::debug!("reading from sensor peripheral");
+            let data = match p.do_action(SENSOR_CHARACTERISTIC_UUID, PeripheralAction::Read).await {
+                Ok(ActionResult::Data(res)) => {
+                    log::debug!("read sensor data: {res:?}");
+                    res
+                },
+                Ok(res) => {
+                    log::debug!("unexpected ActionResult received: {res:?}");
+                    return Err(PeripheralError::NoPeripheral); // todo better error here
+                },
+                Err(e) => {
+                    log::warn!("Failed to read sensor data: {e:?}");
+                    return Err(PeripheralError::NoPeripheral); // todo better error here
+                }
+            };
+            log::info!("Read from sensor: {data:?}");
+            Ok(data)
+        }
+
+        /// Subscribe to data from a Peripheral with given address
+        ///
+        /// Subscribe to data updates from a Peripheral with address *addr*
+        /// This can fail if no peripheral with the given address is found
+        async fn subscribe(&self, addr: BDAddr) -> Result<(), PeripheralError> {
+            let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
+                Some(p) => p.clone(),
+                None => {
+                    return Err(PeripheralError::NoPeripheral);
+                }
+            };
+            log::debug!("subscribing to data from sensor peripheral");
+            match p.do_action(SENSOR_CHARACTERISTIC_UUID, PeripheralAction::Subscribe).await {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    log::warn!("Failed to subscribe to sensor data: {e:?}");
+                    Err(PeripheralError::NoPeripheral) // todo better error here
+                }
+            }
+        }
+
+        /// Unsubscribe to data from a Peripheral with given address
+        ///
+        /// Unubscribe to data updates from a Peripheral with address *addr*
+        /// This can fail if no peripheral with the given address is found
+        async fn unsubscribe(&self, addr: BDAddr) -> Result<(), PeripheralError> {
+            let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
+                Some(p) => p.clone(),
+                None => {
+                    return Err(PeripheralError::NoPeripheral);
+                }
+            };
+            log::debug!("unsubscribing to data from sensor peripheral");
+            match p.do_action(SENSOR_CHARACTERISTIC_UUID, PeripheralAction::Unsubscribe).await {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    log::warn!("Failed to unsubscribe to sensor data: {e:?}");
+                    Err(PeripheralError::NoPeripheral) // todo better error here
+                }
+            }
+        }
+
         /// Run Peripheral Manager
-        /// 
+        ///
         /// Run the PeripheralMgr loop.
-        /// 
+        ///
         pub async fn run(&mut self) -> u32 {
 
             let central_state = match self.central.as_ref().unwrap().adapter_state().await {
@@ -478,7 +401,12 @@ pub mod peripheral {
                 if let Ok(Some(event)) = time::timeout(Duration::from_nanos(1), events.next()).await {
                     match event {
                         CentralEvent::DeviceDiscovered(id) => {
-                            let peripheral = self.central.as_ref().unwrap().peripheral(&id).await.unwrap();
+                            let peripheral = match self.central.as_ref().unwrap().peripheral(&id).await {
+                                Ok(p) => p,
+                                Err(_) => {
+                                    continue;
+                                }
+                            };
                             let properties = peripheral.properties().await.unwrap();
                             let addr = properties.as_ref().unwrap().address;
 
@@ -561,6 +489,28 @@ pub mod peripheral {
                             log::warn!("Blink failed for {addr:?}");
                         }
                     },
+                    Ok(HubMsg::ReadFrom(addr)) => {
+                        log::info!("Reading from periphaeral ({addr:?})");
+                        match self.read(addr).await {
+                            Err(_) => {
+                                log::warn!("Failed to read from sensor ({addr:?})");
+                            },
+                            Ok(res) => {
+                                log::info!("sending new value ({res:?}) to hub");
+                                self.tx.send(EventMsg::NewData(addr, res)).unwrap();
+                            }
+                        }
+                    }
+                    Ok(HubMsg::Subscribe(addr)) => {
+                        if self.subscribe(addr).await.is_err() {
+                            log::warn!("Failed to subscribe to sensor data!");
+                        }
+                    },
+                    Ok(HubMsg::Unsubscribe(addr)) => {
+                        if self.unsubscribe(addr).await.is_err() {
+                            log::warn!("Failed to unsubscribe!");
+                        }
+                    },
                     Ok(HubMsg::FindSensors) => {
                         log::info!("looking for sensors");
                         if self.find_sensors().await.is_err() {
@@ -586,7 +536,38 @@ pub mod peripheral {
                         break;
                     }
                 };
+
+                // check notfication channels
+                // TODO: this does not really work
+                // sometimes i receive notifications, mostly not though
+                // not sure which side is responsible yet (arduino ble, or rust btleplug or even bluez)
+                for p in self.sensors.iter() {
+                    //log::debug!("checking notifications");
+                    let mut stream = match p.peripheral.notifications().await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            log::warn!("Could not get notification stream from peripheral: {e:?}");
+                            continue;
+                        }
+                    };
+
+                    if let Ok(Some(data)) = time::timeout(Duration::from_nanos(1), stream.next()).await {
+                        log::debug!("Received data notification from sensor!");
+                        let d = match <[u8;4]>::try_from(&data.value[..4]) {
+                            Ok(arr) => u32::from_le_bytes(arr),
+                            Err(_) => {
+                                log::debug!("invalid value notification received: {data:?}");
+                                continue;
+                            }
+                        };
+                        log::debug!("sending data to hub: {d:?}");
+                        self.tx.send(EventMsg::NewData(p.addr, d)).unwrap();
+                    }
+
+                }
             }
+
+            log::debug!("PeripheralMgr::run() ending");
 
             // let's clean up after ourselves
             if self.central.as_ref().unwrap().stop_scan().await.is_err() {
