@@ -20,7 +20,7 @@ Simple GUI to interact with specific BLE devices.
 - [x] make button image work OR make button show name/value
     - changed interface to have multiple buttons per sensor
 - [ ] make everything better and more robust
-- [ ] first automatic connection to peripheral always fails, why?
-    - tbh, i think disconnect actually somehow fails: peripheral sees the disconnect, but hub almost never receives the host disconnect event
+- [x] first automatic connection to peripheral always fails, why?
+    - solved: on discover, peripheral was not added ot the list and when hub requested connect, the peripheral was therefore not found; fixed now
 - [x] sensor data arrives wrong! (endianness?) - not anymore
 - [x] make ui updatable on changes

@@ -397,7 +397,7 @@ pub mod peripheral {
             log::info!("event handler intialized!");
 
             loop {
-                // check for an event  - with timeout making this non-blocking
+                // check for a bluetooth event  - with timeout making this non-blocking
                 if let Ok(Some(event)) = time::timeout(Duration::from_nanos(1), events.next()).await {
                     match event {
                         CentralEvent::DeviceDiscovered(id) => {
@@ -417,6 +417,9 @@ pub mod peripheral {
                             // we only care about our sensor here
                             if name.contains("MoistureSensor") {
                                 log::info!("DeviceDiscovered: {:?} {}", addr, name);
+
+                                // add new sensor to list and inform hub
+                                self.sensors.push(SensorPeripheral::new(peripheral, addr));
                                 self.tx.send(EventMsg::DeviceDiscovered(addr)).unwrap();
                             }
                         },
@@ -476,6 +479,10 @@ pub mod peripheral {
                     },
                     Ok(HubMsg::Ping) => {
                         log::info!("received Ping from main");
+                        log::debug!("Peripheral-mgr managing the following peripherals:");
+                        for s in self.sensors.iter() {
+                            log::debug!("{s:?}");
+                        }
                     }
                     Ok(HubMsg::BlinkAll) => {
                         log::info!("blinking all sensors");

@@ -19,9 +19,9 @@ pub mod sensor {
         Success,
         Data(u32),
     }
-    
+
     /// Sensor Peripheral
-    /// 
+    ///
     /// Individual Sensor Peripheral device
     /// Represents one Sensor Peripheral
     /// @todo should i remove this abstraction? i feel like this introduces more complexity than is necessary
@@ -30,7 +30,6 @@ pub mod sensor {
         pub peripheral: Peripheral,
         pub addr: BDAddr,
         connected: bool,
-        value: u32,
     }
 
     impl std::fmt::Display for SensorPeripheral {
@@ -51,7 +50,6 @@ pub mod sensor {
                 peripheral: p,
                 addr: a,
                 connected: false,
-                value: 0,
             }
         }
 
@@ -64,7 +62,7 @@ pub mod sensor {
         }
 
         /// Connect to peripheral
-        /// 
+        ///
         /// Check first if already connected
         pub async fn connect(&mut self) -> Result<bool, PeripheralError> {
             if match self.peripheral.is_connected().await {
@@ -127,15 +125,14 @@ pub mod sensor {
             // discover services and characteristics
             let _ = self.peripheral.discover_services().await;
 
-            let chars = self.peripheral.characteristics();
-            let cmd_char = match chars.iter().find(|c| c.uuid == uuid) {
+            let ch = match self.peripheral.characteristics().iter().find(|c| c.uuid == uuid) {
                 None => return Err(PeripheralError::NoCharacteristic),
                 Some(char) => char.clone()
             };
 
             match action {
                 PeripheralAction::Write(data) => {
-                    match self.write(cmd_char, data).await {
+                    match self.write(ch, data).await {
                         Ok(_) => {
                             log::debug!("Write success");
                             Ok(ActionResult::Success)
@@ -144,7 +141,7 @@ pub mod sensor {
                     }
                 },
                 PeripheralAction::Read => {
-                    match self.read(cmd_char).await {
+                    match self.read(ch).await {
                         Ok(val) => {
                             log::debug!("Read success: {val:?}");
                             Ok(ActionResult::Data(val))
@@ -153,7 +150,7 @@ pub mod sensor {
                     }
                 },
                 PeripheralAction::Subscribe => {
-                    match self.subscribe(cmd_char).await {
+                    match self.subscribe(ch).await {
                         Ok(_) => {
                             log::debug!("Subscribe success");
                             Ok(ActionResult::Success)
@@ -162,7 +159,7 @@ pub mod sensor {
                     }
                 },
                 PeripheralAction::Unsubscribe => {
-                    match self.unsubscribe(cmd_char).await {
+                    match self.unsubscribe(ch).await {
                         Ok(_) => {
                             log::debug!("Unsubscribe success");
                             Ok(ActionResult::Success)
@@ -197,10 +194,7 @@ pub mod sensor {
 
         pub async fn subscribe(&self, char: Characteristic) -> Result<(), PeripheralError> {
             match self.peripheral.subscribe(&char).await {
-                Ok(_) => {
-                    log::debug!("Subscribed!");
-                    Ok(())
-                },
+                Ok(_) => Ok(()),
                 Err(e) => {
                     log::warn!("Subscribing failed: {e:?}");
                     Err(PeripheralError::WriteFailed)
