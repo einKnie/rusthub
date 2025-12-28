@@ -104,27 +104,32 @@ impl MeasureApp {
         self.tx.send(HubMsg::FindSensors).unwrap();
     }
 
-    fn blink(&mut self, addr: BDAddr) {
+    fn ping(&self) {
+        log::info!("pinging manager");
+        self.tx.send(HubMsg::Ping).unwrap();
+    }
+
+    fn blink(&self, addr: BDAddr) {
         log::info!("blinking led");
         self.tx.send(HubMsg::Blink(addr)).unwrap();
     }
 
-    fn read_sensor(&mut self, addr: BDAddr) {
+    fn read_sensor(&self, addr: BDAddr) {
         log::info!("reading from sensor");
         self.tx.send(HubMsg::ReadFrom(addr)).unwrap();
     }
 
-    fn subscribe(&mut self, addr: BDAddr) {
+    fn subscribe(&self, addr: BDAddr) {
         log::info!("subscribing to data from sensor");
         self.tx.send(HubMsg::Subscribe(addr)).unwrap();
     }
 
-    fn unsubscribe(&mut self, addr: BDAddr) {
+    fn unsubscribe(&self, addr: BDAddr) {
         log::info!("unsubscribing to data from sensor");
         self.tx.send(HubMsg::Unsubscribe(addr)).unwrap();
     }
 
-    fn disconnect_all(&mut self) {
+    fn disconnect_all(&self) {
         for p in self.sensors.iter() {
             self.tx.send(HubMsg::Disconnect(p.addr)).unwrap();
         }
@@ -182,7 +187,7 @@ impl MeasureApp {
                     }
                     EventMsg::ServiceDiscovered(addr) => {
                         log::info!("Found Moisture LED service: {addr:?}")
-                    } // does nothing: i think b/c the sensor does not advertise; i guess i have to add that lol
+                    } // not really needed; and sensor currently does not advrertise this
                 };
             }
             Err(TryRecvError::Empty) => (),
@@ -218,8 +223,13 @@ impl eframe::App for MeasureApp {
                 }
             }
 
+            // TODO: I have to take this ugly route to be able to iterate through the sensors mutably
+            // with self.sensors.iter_mut() the whole self becomes mutably borrowed which messes things up here;
+            // find out if there is a better (canonical) way to do this
+            let mut sensors = self.sensors.clone();
             // one button for each connected sensor
-            for mut s in self.sensors.clone() {
+            for s in sensors.iter_mut() {
+
                 // idea: have a 'box' per peripheral, with several buttons (read, blink, disconnect)
                 ui.add(egui::Label::new(format!("{0} ({1})", s.name, s.value)));
                 if ui.button("Read").clicked() {
@@ -228,6 +238,7 @@ impl eframe::App for MeasureApp {
                 if ui.button("Blink").clicked() {
                     self.blink(s.addr);
                 }
+
                 if s.subscribed {
                     if ui.button("Unsubscribe").clicked() {
                         self.unsubscribe(s.addr);
@@ -236,15 +247,17 @@ impl eframe::App for MeasureApp {
                 } else {
                     if ui.button("Subscribe").clicked() {
                         self.subscribe(s.addr);
-                        s.subscribed = true; // why is this not updated?
+                        s.subscribed = true;
                     }
                 }
 
                 ui.add(egui::Separator::default());
-                // if ui.add(egui::Button::new(egui::Image::new(egui::include_image!("../data/sensor.png")))).clicked() {
-                //     // self.blink(s.addr);
-                //     self.read_sensor(s.addr);
-                // }
+            }
+            // update sensors (in case subscription status changed)
+            self.sensors = sensors.clone();
+
+            if ui.button("Ping").clicked() {
+                self.ping();
             }
 
             if ui.button("Disconnect all").clicked() {
@@ -258,8 +271,7 @@ impl eframe::App for MeasureApp {
             }
 
             // yes, this updates the ui all the time, but this (no na) also causes cpu usage to go up
-            // so no: i want to 'manually' update the ui when a value changes
-            // ok, actually i need this, i'm stupid. the enetire msg handling loop is als run in here -.-
+            // but we actually need this. the entire msg handling loop is also run in here.
             ui.ctx().request_repaint();
         });
     }
