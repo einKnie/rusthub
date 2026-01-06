@@ -1,5 +1,4 @@
 pub mod error {
-
     use std::error::Error;
 
     /// Peripheral Error
@@ -11,7 +10,6 @@ pub mod error {
         NoCharacteristic,
         WriteFailed,
         ReadFailed,
-        OtherError(Box<dyn Error>),
     }
 
     impl std::fmt::Display for PeripheralError {
@@ -23,7 +21,6 @@ pub mod error {
                 PeripheralError::NoCharacteristic => write!(f, "BLE Characteristic not found on sensor device"),
                 PeripheralError::WriteFailed => write!(f, "Write failed"),
                 PeripheralError::ReadFailed => write!(f, "Read failed"),
-                PeripheralError::OtherError(e) => write!(f, "Other Error: {e}",)
             }
         }
     }
@@ -33,11 +30,10 @@ pub mod error {
     impl PeripheralError {
 
         /// Return a boxed instance
-        /// 
+        ///
         /// not really needed anymore
         pub fn new_boxed(err: PeripheralError) -> Box<dyn Error> {
             Box::new(err)
         }
     }
-
 }

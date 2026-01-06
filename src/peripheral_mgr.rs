@@ -1,7 +1,6 @@
 pub mod sensor;
 pub mod error;
 
-
 pub mod peripheral {
     use crate::peripheral_mgr::error::error::PeripheralError;
     use crate::peripheral_mgr::sensor::sensor::{SensorPeripheral, PeripheralAction, ActionResult};
@@ -128,6 +127,7 @@ pub mod peripheral {
         /// Find all SensorPeripherals
         ///
         /// Check all bluetooth peripherals. If one matches with our spec, then connect to it and add to vector
+        /// (at this point this is basically a backup, but the sensor usually advertises itself anyway through the bt event channel)
         async fn find_sensors(&mut self) -> Result<(), PeripheralError> {
             let prevlen = self.sensors.len();
             log::info!("known sensors: {prevlen:?}");
@@ -144,13 +144,10 @@ pub mod peripheral {
                     log::debug!("found sensor device!");
                     let addr = p.properties().await.unwrap().unwrap().address;
 
-                    match self.sensors.iter().find(|&p| p.addr == addr) {
-                        Some(_) => {
-                            log::debug!("Sensor already known!");
-                            continue;
-                        },
-                        None => (),
-                    };
+                    if self.sensors.iter().any(|p| p.addr == addr) {
+                        log::debug!("Sensor already known!");
+                        continue;
+                    }
 
                     match p.connect().await {
                         Ok(_) => log::debug!("connected"),
@@ -179,6 +176,8 @@ pub mod peripheral {
         /// Find Peripheral from address
         ///
         /// Return a SensorPeripheral with the given address, if found
+        /// @deprecated
+        #[allow(dead_code)]
         async fn find_sensor(&mut self, addr: BDAddr) -> Result<SensorPeripheral, PeripheralError> {
             let mut found = Vec::<Peripheral>::new();
 
@@ -213,8 +212,7 @@ pub mod peripheral {
         /// Connect Peripheral
         ///
         /// Connect to a Peripheral with the given address
-        /// If the Peripheral is not known yet, find it and add it to the list as well
-        /// @todo check if this even works, when i want to later address a peripheral added to the list here
+        /// This can fail if no peripheral with the given address is found
         async fn connect(&mut self, addr: BDAddr) -> Result<(), PeripheralError> {
             let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
                 Some(p) => p.clone(),
@@ -235,6 +233,7 @@ pub mod peripheral {
         /// Disconnect Peripheral
         ///
         /// disconnect from a Peripheral with the given address
+        /// This can fail if no peripheral with the given address is found
         async fn disconnect(&mut self, addr: BDAddr) -> Result<(), PeripheralError> {
             let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
                 Some(p) => p.clone(),

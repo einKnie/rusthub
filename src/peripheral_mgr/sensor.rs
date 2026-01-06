@@ -29,7 +29,6 @@ pub mod sensor {
     pub struct SensorPeripheral {
         pub peripheral: Peripheral,
         pub addr: BDAddr,
-        connected: bool,
     }
 
     impl std::fmt::Display for SensorPeripheral {
@@ -49,16 +48,11 @@ pub mod sensor {
             Self {
                 peripheral: p,
                 addr: a,
-                connected: false,
             }
         }
 
         pub fn addr(self) -> BDAddr {
             self.addr
-        }
-
-        pub fn connected(self) -> bool {
-            self.connected
         }
 
         /// Connect to peripheral
@@ -73,7 +67,6 @@ pub mod sensor {
                 }
             } {
                 log::info!("already connected!");
-                self.connected = true;
                 return Ok(true);
             }
 
@@ -91,7 +84,6 @@ pub mod sensor {
             let addr = self.peripheral.properties().await.unwrap().unwrap().address;
             log::debug!("{:?}", addr);
 
-            self.connected = true;
             Ok(true)
         }
 
@@ -104,14 +96,12 @@ pub mod sensor {
                 }
             } {
                 log::info!("already disconnected!");
-                self.connected = false;
                 return Ok(true);
             }
 
             match self.peripheral.disconnect().await {
                 Ok(_) => {
                     log::debug!("disconnected");
-                    self.connected = false;
                     Ok(true)
                 },
                 Err(e) => {
