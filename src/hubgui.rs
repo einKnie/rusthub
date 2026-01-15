@@ -156,6 +156,10 @@ impl MeasureApp {
         }
     }
 
+    fn connect_all(&self) {
+        self.tx.send(HubMsg::ConnectAll).unwrap();
+    }
+
     fn cleanup_and_exit(&self, ctx: egui::Context) {
         // fire-and-forget, since we can't await the handle here
         // and this is good enough for now (sorry)
