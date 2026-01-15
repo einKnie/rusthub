@@ -2,11 +2,11 @@ pub mod sensor;
 pub mod error;
 
 pub mod peripheral {
-    use crate::peripheral_mgr::error::error::PeripheralError;
-    use crate::peripheral_mgr::sensor::sensor::{SensorPeripheral, PeripheralAction, ActionResult};
+    use crate::peripheral_mgr::error::PeripheralError;
+    use crate::peripheral_mgr::sensor::{SensorPeripheral, PeripheralAction, ActionResult};
 
     use btleplug::api::{Central, CentralEvent, Manager as _, Peripheral as _, BDAddr, ScanFilter};
-    use btleplug::platform::{Adapter, Manager, Peripheral};
+    use btleplug::platform::{Adapter, Manager};
     use std::time::Duration;
     use tokio::time;
     use uuid::{uuid,Uuid};
@@ -159,7 +159,7 @@ pub mod peripheral {
                         Ok(_) => log::debug!("connected"),
                         Err(e) => {
                             log::warn!("Failed to connect to sensor! {:?}", e);
-                            return Err(PeripheralError::ConnectionFailed);
+                            return Err(PeripheralError::ConnectionError);
                         }
                     };
 
@@ -171,7 +171,7 @@ pub mod peripheral {
             }
 
             if self.sensors.len() == prevlen {
-                log::debug!("no peripheral found (old len: {prevlen:?} - newlen: {:?})", self.sensors.len());
+                log::debug!("no new peripheral found (old len: {prevlen:?} - newlen: {:?})", self.sensors.len());
                 Err(PeripheralError::NoPeripheral)
             } else {
                 log::debug!("found a new sensor! (old len: {prevlen:?} - newlen: {:?})", self.sensors.len());
@@ -179,52 +179,18 @@ pub mod peripheral {
             }
         }
 
-        /// Connect to all known sensors
+        /// Connect to all known peripherals
         ///
         /// this function ignores connection errors
         async fn connect_all(&mut self) -> Result<(), PeripheralError> {
             let sensors = self.sensors.clone();
             for s in &sensors {
-                let _ = self.connect(s.addr).await;
+                if self.connect(s.addr).await.is_err() {
+                    log::debug!("failed to connect to peripheral");
+                }
             }
             self.sensors = sensors;
             Ok(())
-        }
-
-        /// Find Peripheral from address
-        ///
-        /// Return a SensorPeripheral with the given address, if found
-        /// @deprecated
-        #[allow(dead_code)]
-        async fn find_sensor(&mut self, addr: BDAddr) -> Result<SensorPeripheral, PeripheralError> {
-            let mut found = Vec::<Peripheral>::new();
-
-            for p in self.central.as_ref().unwrap().peripherals().await.unwrap() {
-                if p.properties()
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .address == addr
-                {
-                    log::debug!("found sensor device!");
-                    found.push(p);
-                }
-            }
-
-            match found.len() {
-                0 => {
-                    log::debug!("no peripheral found");
-                    Err(PeripheralError::NoPeripheral)
-                },
-                1 => {
-                    log::debug!("one peripheral found");
-                    Ok(SensorPeripheral::new(found.pop().unwrap(), addr))
-                }
-                _ => {
-                    log::debug!("multiple peripherals found");
-                    Err(PeripheralError::NoPeripheral)
-                }
-            }
         }
 
         /// Connect Peripheral
@@ -239,13 +205,23 @@ pub mod peripheral {
                 }
             };
             match p.connect().await {
-                Ok(true) => Ok(()),
-                Ok(false) => Err(PeripheralError::ConnectionFailed),
-                Err(e) => {
-                    log::debug!("connection failed: {e:?}");
-                    Err(e)
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            }
+        }
+
+        /// Disconnect from all known peripherals
+        ///
+        /// this function ignores connection errors
+        async fn disconnect_all(&mut self) -> Result<(), PeripheralError> {
+            let sensors = self.sensors.clone();
+            for s in &sensors {
+                if self.disconnect(s.addr).await.is_err() {
+                    log::debug!("Failed to disconnect from peripheral");
                 }
             }
+            self.sensors = sensors;
+            Ok(())
         }
 
         /// Disconnect Peripheral
@@ -260,8 +236,7 @@ pub mod peripheral {
                 }
             };
             match p.disconnect().await {
-                Ok(true) => Ok(()),
-                Ok(false) => Err(PeripheralError::ConnectionFailed),
+                Ok(_) => Ok(()),
                 Err(e) => Err(e)
             }
         }
@@ -333,11 +308,11 @@ pub mod peripheral {
                 },
                 Ok(res) => {
                     log::debug!("unexpected ActionResult received: {res:?}");
-                    return Err(PeripheralError::NoPeripheral); // todo better error here
+                    return Err(PeripheralError::InvalidData);
                 },
                 Err(e) => {
                     log::warn!("Failed to read sensor data: {e:?}");
-                    return Err(PeripheralError::NoPeripheral); // todo better error here
+                    return Err(PeripheralError::IOError);
                 }
             };
             log::info!("Read from sensor: {data:?}");
@@ -362,7 +337,7 @@ pub mod peripheral {
                 Ok(_) => (),
                 Err(e) => {
                     log::warn!("Failed to subscribe to sensor data: {e:?}");
-                    return Err(PeripheralError::NoPeripheral); // todo better error here
+                    return Err(PeripheralError::IOError);
                 }
             }
 
@@ -395,7 +370,7 @@ pub mod peripheral {
                 Ok(_) => (),
                 Err(e) => {
                     log::warn!("Failed to unsubscribe to sensor data: {e:?}");
-                    return Err(PeripheralError::NoPeripheral); // todo better error here
+                    return Err(PeripheralError::IOError);
                 }
             }
 
@@ -428,7 +403,7 @@ pub mod peripheral {
                 Ok(s) => s,
                 Err(e) => {
                     log::warn!("Could not get notification stream from peripheral: {e:?}");
-                    return 1;
+                    panic!("Could not get notification stream");
                 }
             };
 
@@ -461,6 +436,8 @@ pub mod peripheral {
             log::debug!("Leaving notification thread for [{0}]", p.addr);
             0
         }
+
+
 
         /// Run Peripheral Manager
         ///
