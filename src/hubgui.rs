@@ -14,8 +14,22 @@ use tokio::task::JoinHandle;
 ///
 /// This is basically the only thing we run from main at this point
 pub fn run_gui() -> u32 {
+
+    // determine path for storage
+    let storage_path = match std::env::home_dir() {
+        Some(mut home_dir) => {
+            home_dir.push("MeasureHub");
+            Some(home_dir)
+        },
+        None => None,
+    };
+
+    dbg!(&storage_path);
+
+    // eframe options
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([320.0, 240.0]),
+        persistence_path: storage_path,
         ..Default::default()
     };
     if eframe::run_native(
@@ -25,7 +39,7 @@ pub fn run_gui() -> u32 {
             // This gives us image support:
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            Ok(Box::<MeasureApp>::new(MeasureApp::new()))
+            Ok(Box::<MeasureApp>::new(MeasureApp::new(cc)))
         }),
     )
     .is_err()
@@ -164,7 +178,7 @@ struct MeasureApp {
 }
 
 impl MeasureApp {
-    pub fn new() -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let (gui_tx, thread_rx) = bounded(4);
         let (thread_tx, gui_rx) = bounded(4);
 
