@@ -52,6 +52,7 @@ pub mod peripheral {
         Unsubscribe(BDAddr),
         FindSensors,
         Connect(BDAddr),
+        ConnectAll,
         Disconnect(BDAddr),
     }
 
@@ -171,6 +172,18 @@ pub mod peripheral {
                 log::debug!("found a new sensor! (old len: {prevlen:?} - newlen: {:?})", self.sensors.len());
                 Ok(())
             }
+        }
+
+        /// Connect to all known sensors
+        ///
+        /// this function ignores connection errors
+        async fn connect_all(&mut self) -> Result<(), PeripheralError> {
+            let sensors = self.sensors.clone();
+            for s in &sensors {
+                let _ = self.connect(s.addr).await;
+            }
+            self.sensors = sensors;
+            Ok(())
         }
 
         /// Find Peripheral from address
@@ -526,6 +539,12 @@ pub mod peripheral {
                         log::info!("connecting to peripheral ({addr:?})");
                         if self.connect(addr).await.is_err() {
                             log::warn!("Connection failed ({addr:?})");
+                        }
+                    },
+                    Ok(HubMsg::ConnectAll) => {
+                        log::debug!("connecting to all known peripherals");
+                        if self.connect_all().await.is_err() {
+                            log::warn!("Failed to connect to all known peripherals");
                         }
                     },
                     Ok(HubMsg::Disconnect(addr)) => {
