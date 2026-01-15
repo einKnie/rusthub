@@ -646,7 +646,7 @@ pub mod peripheral {
                 };
             }
 
-            log::debug!("PeripheralMgr::run() ending");
+            log::debug!("PeripheralMgr::run() cleaning up");
 
             // let's clean up after ourselves
             if self.central.as_ref().unwrap().stop_scan().await.is_err() {
@@ -667,6 +667,7 @@ pub mod peripheral {
                 }
             }
 
+            log::debug!("PeripheralMgr::run() done");
             1
         }
     }

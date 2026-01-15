@@ -3,12 +3,16 @@ use crate::peripheral_mgr::peripheral::{EventMsg, HubMsg};
 use btleplug::api::BDAddr;
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 use eframe::egui::global_theme_preference_switch;
-use tokio::task::JoinHandle;
 
 /// Run the measurent GUI
 ///
 /// This is basically the only thing we run from main at this point
-pub fn run_gui() -> u32 {
+pub async fn run_gui() -> u32 {
+
+    let (gui_tx, thread_rx) = bounded(4);
+    let (thread_tx, gui_rx) = bounded(4);
+
+    let mgr_handle = tokio::spawn(peripheral::mgr_run(thread_tx, thread_rx));
 
     // determine path for storage
     let storage_path = match std::env::home_dir() {
@@ -34,13 +38,18 @@ pub fn run_gui() -> u32 {
             // This gives us image support:
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            Ok(Box::<MeasureApp>::new(MeasureApp::new(cc)))
+            Ok(Box::<MeasureApp>::new(MeasureApp::new(cc, gui_tx, gui_rx)))
         }),
     )
     .is_err()
     {
         log::error!("GUI ended with error");
     }
+
+    // wait for manager to join
+    log::debug!("waiting for manager to join");
+    mgr_handle.await.expect("PeripheralMgr thread has panicked");
+
     0
 }
 
@@ -168,22 +177,15 @@ struct MeasureAppState {
 struct MeasureApp {
     rx: Receiver<EventMsg>,
     tx: Sender<HubMsg>,
-    _handle: JoinHandle<u32>,
 
     state: MeasureAppState,
 }
 
 impl MeasureApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        let (gui_tx, thread_rx) = bounded(4);
-        let (thread_tx, gui_rx) = bounded(4);
-
-        let mgr_handle = tokio::spawn(peripheral::mgr_run(thread_tx, thread_rx));
-
+    pub fn new(_cc: &eframe::CreationContext<'_>, tx: Sender<HubMsg>, rx: Receiver<EventMsg>) -> Self {
         Self {
-            tx: gui_tx,
-            rx: gui_rx,
-            _handle: mgr_handle,
+            tx,
+            rx,
             state: MeasureAppState {sensors: Vec::<ConnectedSensor>::new(), action: UiAction::NoAction},
         }
     }
@@ -236,9 +238,9 @@ impl MeasureApp {
         self.tx.send(HubMsg::ConnectAll).unwrap();
     }
 
-    fn cleanup_and_exit(&self, ctx: egui::Context) {
-        // fire-and-forget, since we can't await the handle here
-        // and this is good enough for now (sorry)
+    fn cleanup_and_exit(&mut self, ctx: egui::Context) {
+        // tell PeripheralMgr to stop
+        // handle is awaited in the runner
         self.tx.send(HubMsg::StopThread).unwrap();
 
         // works (https://github.com/emilk/egui/discussions/4103#discussioncomment-9225022)
