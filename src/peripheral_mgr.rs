@@ -430,12 +430,13 @@ pub mod peripheral {
                             let properties = peripheral.properties().await.unwrap();
                             let addr = properties.as_ref().unwrap().address;
 
-                            let name = properties
-                                .and_then(|p| p.local_name)
-                                .map(|local_name| local_name.to_string())
-                                .unwrap_or_default();
-                            // we only care about our sensor here
-                            if name.contains("MoistureSensor") {
+                            if self.sensors.iter().any(|p| p.addr == addr) {
+                                // we only care about known sensors here
+                                let name = properties
+                                    .and_then(|p| p.local_name)
+                                    .map(|local_name| local_name.to_string())
+                                    .unwrap_or_default();
+
                                 log::info!("DeviceConnected: {:?} {}", addr, name);
                                 self.tx.send(EventMsg::DeviceConnected(addr)).unwrap();
                             }
@@ -445,13 +446,10 @@ pub mod peripheral {
                             let properties = peripheral.properties().await.unwrap();
                             let addr = properties.as_ref().unwrap().address;
 
-                            let name = properties
-                                .and_then(|p| p.local_name)
-                                .map(|local_name| local_name.to_string())
-                                .unwrap_or_default();
-                            // we only care about our sensor here
-                            if name.contains("MoistureSensor") {
-                                log::info!("DeviceDisconnected: {:?} {}", addr, name);
+                            // check if the disconnected device is known to us
+                            // peripheral name is not consistently available here, so let's compare address
+                            if self.sensors.iter().any(|p| p.addr == addr) {
+                                log::info!("DeviceDisconnected: {:?}", addr);
                                 self.tx.send(EventMsg::DeviceDisconnected(addr)).unwrap();
                             }
                         },
