@@ -269,12 +269,21 @@ pub mod peripheral {
         /// Blink all SensorPeripherals
         ///
         /// Perform the Blink routine on all known SensorPeripherals, sequentially
-        async fn blinky_all(&mut self) -> Result<(), PeripheralError> {
+        async fn blinky_all(&self) -> Result<(), PeripheralError> {
             for mut p in self.sensors.clone() {
-                dbg!(&p);
-                if self.blink_sensor(&mut p).await.is_err() {
-                    log::warn!("Failed to blink Peripheral ({:?})", p.addr());
-                }
+                //dbg!(&p);
+                // run this in thread, so we can blink all of them at once
+                tokio::spawn(async move {
+                    for i in 0..21 {
+                        let led_cmd: [u8;1] = match i%2 {
+                            0 => [0],
+                            _ => [1]
+                        };
+                        log::debug!("writing: {:?} to {:?}", led_cmd, p.addr);
+                        let _ = p.do_action(LED_CHARACTERISTIC_UUID, PeripheralAction::Write(led_cmd)).await;
+                        time::sleep(Duration::from_millis(200)).await;
+                    }
+                });
             }
             Ok(())
         }
@@ -290,23 +299,18 @@ pub mod peripheral {
                     return Err(PeripheralError::NoPeripheral);
                 }
             };
-            self.blink_sensor(&mut p).await
-        }
 
-        /// Blink a given SensorPeripheral
-        ///
-        /// Perform the Blink routine on a connected SensorPeripheral
-        async fn blink_sensor(&self, p: &mut SensorPeripheral) -> Result<(), PeripheralError> {
-
-            for i in 0..21 {
-                let led_cmd: [u8;1] = match i%2 {
-                    0 => [0],
-                    _ => [1]
-                };
-                log::debug!("writing: {:?}", led_cmd);
-                p.do_action(LED_CHARACTERISTIC_UUID, PeripheralAction::Write(led_cmd)).await?;
-                time::sleep(Duration::from_millis(200)).await;
-            }
+            tokio::spawn(async move {
+                for i in 0..21 {
+                    let led_cmd: [u8;1] = match i%2 {
+                        0 => [0],
+                        _ => [1]
+                    };
+                    log::debug!("writing: {:?} to {:?}", led_cmd, p.addr);
+                    let _ = p.do_action(LED_CHARACTERISTIC_UUID, PeripheralAction::Write(led_cmd)).await;
+                    time::sleep(Duration::from_millis(200)).await;
+                }
+            });
             Ok(())
         }
 
