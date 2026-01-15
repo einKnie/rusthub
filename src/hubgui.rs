@@ -72,14 +72,31 @@ impl ConnectedSensor {
     }
 }
 
+/// UiAction
+///
+/// enum denoting currently running actions
+/// mostly used for displaying spinner
+#[derive(Clone, Debug, PartialEq)]
+enum UiAction {
+    NoAction,
+    Searching,
+    Connecting(BDAddr),
+}
+
+/// App state
+#[derive(Clone, Debug)]
+struct MeasureAppState {
+    sensors: Vec<ConnectedSensor>,
+    action: UiAction,
+}
+
 /// Measurement GUI
 struct MeasureApp {
     rx: Receiver<EventMsg>,
     tx: Sender<HubMsg>,
-    sensors: Vec<ConnectedSensor>,
     _handle: JoinHandle<u32>,
 
-    searching: bool,
+    state: MeasureAppState,
 }
 
 impl MeasureApp {
@@ -92,15 +109,14 @@ impl MeasureApp {
         Self {
             tx: gui_tx,
             rx: gui_rx,
-            sensors: Vec::<ConnectedSensor>::new(),
             _handle: mgr_handle,
-            searching: false,
+            state: MeasureAppState {sensors: Vec::<ConnectedSensor>::new(), action: UiAction::NoAction},
         }
     }
 
     fn find_sensors(&mut self) {
         log::info!("looking for sensors");
-        self.searching = true;
+        self.state.action = UiAction::Searching;
         self.tx.send(HubMsg::FindSensors).unwrap();
     }
 
@@ -135,7 +151,7 @@ impl MeasureApp {
     }
 
     fn disconnect_all(&self) {
-        for p in self.sensors.iter() {
+        for p in self.state.sensors.iter() {
             self.tx.send(HubMsg::Disconnect(p.addr)).unwrap();
         }
     }
@@ -161,30 +177,32 @@ impl MeasureApp {
                     EventMsg::DeviceDiscovered(addr) => {
                         log::info!("Device Discovered: {addr:?}");
                         self.tx.send(HubMsg::Connect(addr)).unwrap();
+                        self.state.action = UiAction::Connecting(addr);
                     }
                     EventMsg::SearchFailed => {
                         log::info!("Failed to find any sensors");
-                        self.searching = false;
+                        self.state.action = UiAction::NoAction;
                     }
                     EventMsg::NewData(addr, data) => {
                         log::info!("received new sensor data for {addr:?}");
-                        if let Some(p) = self.sensors.iter_mut().find(|p| p.addr == addr) {
+                        if let Some(p) = self.state.sensors.iter_mut().find(|p| p.addr == addr) {
                             p.value = data;
                         }
                     }
                     EventMsg::DeviceConnected(addr) => {
                         log::info!("Device Connected: {addr:?}");
-                        self.sensors.push(ConnectedSensor {
+                        self.state.sensors.push(ConnectedSensor {
                             addr: addr,
-                            name: format!("Sensor {:?}", self.sensors.len() + 1),
+                            name: format!("Sensor {:?}", self.state.sensors.len() + 1),
                             value: 0,
                             subscribed: false,
                         });
-                        self.searching = false;
+                        self.state.action = UiAction::NoAction;
                     }
                     EventMsg::DeviceDisconnected(addr) => {
                         log::info!("Device Disconnected: {addr:?}");
                         let removed = self
+                            .state
                             .sensors
                             .extract_if(.., |x| x.addr() == addr)
                             .collect::<Vec<_>>();
@@ -214,24 +232,32 @@ impl eframe::App for MeasureApp {
                 log::warn!("disconnected from thread, should stop");
             }
 
-            // button only clickable if not currently searching
-            if !self.searching {
-                if ui.add(egui::Button::new("Find Sensors")).clicked() {
-                    self.find_sensors();
-                }
-            } else {
-                if ui
-                    .add_enabled(false, egui::Button::new("Find Sensors"))
-                    .clicked()
-                {
-                    unreachable!();
-                }
+            // enable button only when no search is in progress
+            if ui.add_enabled(self.state.action != UiAction::Searching, egui::Button::new("Find Sensors"))
+                .clicked()
+            {
+                self.find_sensors();
             }
+
+            // show spinner while action in progress
+            if self.state.action != UiAction::NoAction {
+                let label = match self.state.action {
+                    UiAction::Searching => String::from("Searching"),
+                    UiAction::Connecting(addr) => format!("Connecting ({addr:?})"),
+                    _ => String::new(),
+                };
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new());
+                    ui.label(label);
+                });
+            }
+
+            ui.add(egui::Separator::default());
 
             // TODO: I have to take this ugly route to be able to iterate through the sensors mutably
             // with self.sensors.iter_mut() the whole self becomes mutably borrowed which messes things up here;
             // find out if there is a better (canonical) way to do this
-            let mut sensors = self.sensors.clone();
+            let mut sensors = self.state.sensors.clone();
             // one button for each connected sensor
             for s in sensors.iter_mut() {
 
@@ -258,8 +284,9 @@ impl eframe::App for MeasureApp {
 
                 ui.add(egui::Separator::default());
             }
-            // update sensors (in case subscription status changed)
-            self.sensors = sensors.clone();
+
+            // update sensors (in case smth was changed)
+            self.state.sensors = sensors.clone();
 
             if ui.button("Ping").clicked() {
                 self.ping();
