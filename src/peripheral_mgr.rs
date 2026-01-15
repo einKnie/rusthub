@@ -13,6 +13,9 @@ pub mod peripheral {
     use crossbeam_channel::{Sender, Receiver, TryRecvError};
     use futures::stream::StreamExt;
 
+    use std::collections::HashMap;
+    use crossbeam_channel::bounded;
+
     /// Specific Characteristic UUID set by Sensor Peripheral
     /// for controlling the sensor LED
     const LED_CHARACTERISTIC_UUID: Uuid = uuid!("d9feb5df-b55f-44ef-b307-63893c5f67e5");
@@ -78,6 +81,7 @@ pub mod peripheral {
     pub struct PeripheralMgr {
         central: Option<Adapter>,
         sensors: Vec<SensorPeripheral>,
+        subscriptions: HashMap<BDAddr, Sender<HubMsg>>,
 
         tx: Sender<EventMsg>,
         rx: Receiver<HubMsg>,
@@ -95,6 +99,7 @@ pub mod peripheral {
             Self {
                 central: None,
                 sensors: Vec::<SensorPeripheral>::new(),
+                subscriptions: HashMap::new(),
                 tx,
                 rx
             }
@@ -339,42 +344,118 @@ pub mod peripheral {
         ///
         /// Subscribe to data updates from a Peripheral with address *addr*
         /// This can fail if no peripheral with the given address is found
-        async fn subscribe(&self, addr: BDAddr) -> Result<(), PeripheralError> {
-            let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
-                Some(p) => p.clone(),
+        async fn subscribe(&mut self, addr: BDAddr) -> Result<(), PeripheralError> {
+            let mut sensors = self.sensors.clone();
+
+            let p = match sensors.iter_mut().find(|p| p.addr == addr) {
+                Some(p) => p,
                 None => {
                     return Err(PeripheralError::NoPeripheral);
                 }
             };
             log::debug!("subscribing to data from sensor peripheral");
             match p.do_action(SENSOR_CHARACTERISTIC_UUID, PeripheralAction::Subscribe).await {
-                Ok(_) => Ok(()),
+                Ok(_) => (),
                 Err(e) => {
                     log::warn!("Failed to subscribe to sensor data: {e:?}");
-                    Err(PeripheralError::NoPeripheral) // todo better error here
+                    return Err(PeripheralError::NoPeripheral); // todo better error here
                 }
             }
+
+            // start notification thread
+            let (mgr_tx, thread_rx) = bounded(4);
+            let _handle = tokio::spawn(PeripheralMgr::handle_notifications(p.clone(), self.tx.clone(), thread_rx));
+
+            // store Sender in hashmap so we can stop the thread on unsubscribe
+            self.subscriptions.insert(addr, mgr_tx);
+
+            self.sensors = sensors;
+            Ok(())
         }
 
         /// Unsubscribe to data from a Peripheral with given address
         ///
         /// Unubscribe to data updates from a Peripheral with address *addr*
         /// This can fail if no peripheral with the given address is found
-        async fn unsubscribe(&self, addr: BDAddr) -> Result<(), PeripheralError> {
-            let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
-                Some(p) => p.clone(),
+        async fn unsubscribe(&mut self, addr: BDAddr) -> Result<(), PeripheralError> {
+            let mut sensors = self.sensors.clone();
+
+            let p = match sensors.iter_mut().find(|p| p.addr == addr) {
+                Some(p) => p,
                 None => {
                     return Err(PeripheralError::NoPeripheral);
                 }
             };
             log::debug!("unsubscribing to data from sensor peripheral");
             match p.do_action(SENSOR_CHARACTERISTIC_UUID, PeripheralAction::Unsubscribe).await {
-                Ok(_) => Ok(()),
+                Ok(_) => (),
                 Err(e) => {
                     log::warn!("Failed to unsubscribe to sensor data: {e:?}");
-                    Err(PeripheralError::NoPeripheral) // todo better error here
+                    return Err(PeripheralError::NoPeripheral); // todo better error here
                 }
             }
+
+            // stop notification thread (and remove entry from hashmap in the process)
+            match self.subscriptions.remove(&addr) {
+                Some(tx) => {
+                    tx.send(HubMsg::StopThread).unwrap();
+                },
+                None => {
+                    log::debug!("subscription not found in current subscriptions");
+                }
+            };
+
+            self.sensors = sensors;
+            Ok(())
+        }
+
+        /// Sensor Notification Handling
+        ///
+        /// Continuously check for notifications on the given stream
+        /// and transmit received data via the given sender, until receiving a ThreadStop command on the receiver.
+        ///
+        /// @todo Is there a way to combine the stream and receiver for a blocking wait on both?
+        /// that would improve performance (not that there's any issues so far)
+        pub async fn handle_notifications(p: SensorPeripheral, tx: Sender<EventMsg>, rx: Receiver<HubMsg>) -> u32 {
+
+            log::debug!("Hello from notification thread for [{0}]", p.addr);
+
+            let mut stream = match p.peripheral.notifications().await {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("Could not get notification stream from peripheral: {e:?}");
+                    return 1;
+                }
+            };
+
+            loop {
+                // Check for Stop msg from caller
+                if let Ok(HubMsg::StopThread) = rx.try_recv() {
+                    log::info!("received stop command from main");
+                    break;
+                }
+
+                // check if there's a notification pending
+                if let Ok(Some(data)) = time::timeout(Duration::from_millis(1), stream.next()).await {
+                //while let Some(data) = stream.next().await {
+                    log::debug!("Received data notification from sensor!");
+                    let d = match <[u8;4]>::try_from(&data.value[..4]) {
+                        Ok(arr) => u32::from_le_bytes(arr),
+                        Err(_) => {
+                            log::debug!("invalid value notification received: {data:?}");
+                            // ignore for now, so far this case has never happened and
+                            // if it occurs i want to know if this even is a stop condition
+                            // or e.g. the next value would be ok again
+                            continue;
+                        }
+                    };
+                    log::debug!("sending data to hub: {d:?}");
+                    tx.send(EventMsg::NewData(p.addr, d)).unwrap();
+                }
+            }
+
+            log::debug!("Leaving notification thread for [{0}]", p.addr);
+            0
         }
 
         /// Run Peripheral Manager
@@ -559,35 +640,6 @@ pub mod peripheral {
                         break;
                     }
                 };
-
-                // check notfication channels
-                // TODO: this does not really work
-                // sometimes i receive notifications, mostly not though
-                // not sure which side is responsible yet (arduino ble, or rust btleplug or even bluez)
-                for p in self.sensors.iter() {
-                    //log::debug!("checking notifications");
-                    let mut stream = match p.peripheral.notifications().await {
-                        Ok(s) => s,
-                        Err(e) => {
-                            log::warn!("Could not get notification stream from peripheral: {e:?}");
-                            continue;
-                        }
-                    };
-
-                    if let Ok(Some(data)) = time::timeout(Duration::from_nanos(1), stream.next()).await {
-                        log::debug!("Received data notification from sensor!");
-                        let d = match <[u8;4]>::try_from(&data.value[..4]) {
-                            Ok(arr) => u32::from_le_bytes(arr),
-                            Err(_) => {
-                                log::debug!("invalid value notification received: {data:?}");
-                                continue;
-                            }
-                        };
-                        log::debug!("sending data to hub: {d:?}");
-                        self.tx.send(EventMsg::NewData(p.addr, d)).unwrap();
-                    }
-
-                }
             }
 
             log::debug!("PeripheralMgr::run() ending");
