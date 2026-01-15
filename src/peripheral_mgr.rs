@@ -576,7 +576,7 @@ pub mod peripheral {
                         log::info!("received Ping from main");
                         log::debug!("Peripheral-mgr managing the following peripherals:");
                         for s in self.sensors.iter() {
-                            log::debug!("{s:?}");
+                            log::debug!("{s}");
                         }
                     }
                     Ok(HubMsg::BlinkAll) => {
