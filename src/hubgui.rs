@@ -114,6 +114,11 @@ impl MeasureApp {
         self.tx.send(HubMsg::Blink(addr)).unwrap();
     }
 
+    fn blink_all(&self) {
+        log::info!("blinking led");
+        self.tx.send(HubMsg::BlinkAll).unwrap();
+    }
+
     fn read_sensor(&self, addr: BDAddr) {
         log::info!("reading from sensor");
         self.tx.send(HubMsg::ReadFrom(addr)).unwrap();
@@ -258,6 +263,10 @@ impl eframe::App for MeasureApp {
 
             if ui.button("Ping").clicked() {
                 self.ping();
+            }
+
+            if ui.button("Blink all").clicked() {
+                self.blink_all();
             }
 
             if ui.button("Disconnect all").clicked() {
