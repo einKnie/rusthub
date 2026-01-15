@@ -1,13 +1,8 @@
-//! TODO
-//! - close button
-//!    - handle mgr disconnect and close gracefully
-//! - improve everything (gui-wise; don't do everything in update, have some memeber variables etc...) => actually, apparently this is not how egui is supposed to work (see "immediate mode gui" vs "retained mode gui")
-
 use crate::peripheral_mgr::peripheral;
 use crate::peripheral_mgr::peripheral::{EventMsg, HubMsg};
 use btleplug::api::BDAddr;
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
-use eframe::egui;
+use eframe::egui::global_theme_preference_switch;
 use tokio::task::JoinHandle;
 
 /// Run the measurent GUI
@@ -125,6 +120,7 @@ struct ConnectedSensor {
     name: SensorName,
     value: SensorValue,
     subscribed: bool,
+    show: bool,
 }
 
 impl PartialEq for ConnectedSensor {
@@ -280,6 +276,7 @@ impl MeasureApp {
                             name: SensorName::new(format!("Sensor {:?}", self.state.sensors.len() + 1)),
                             value: SensorValue::new(0),
                             subscribed: false,
+                            show: false,
                         });
                         self.state.action = UiAction::NoAction;
                     }
@@ -307,14 +304,66 @@ impl MeasureApp {
     }
 }
 
-// todo: statusbar with current messages (i.e. search failed)
 impl eframe::App for MeasureApp {
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+
+        // run message handling
+        if self.run() < 0 {
+            log::warn!("disconnected from thread, should stop");
+        }
+
+        egui::SidePanel::left("left panel").show(ctx, |ui| {
+
+            // general interface (independent from connected sensors)
+            // TODO: use symbols here to make this more compact
+            // TODO use this space for testing
+            // i'd like to have the sensor list here and select which sensor to manage in the central panel (or something like that)
+            ui.vertical(|ui| {
+                global_theme_preference_switch(ui);
+
+                if !self.state.sensors.is_empty() {
+                    // Sensors label
+                    ui.horizontal(|ui| {
+                        ui.label("Sensors");
+                        ui.add(egui::Separator::default().horizontal());
+                    });
+
+                    let mut sensors = self.state.sensors.clone();
+
+                    // one button for each connected sensor
+                    // TODO: test with more than one; when more than one selected, display next to each other like in a dashboard
+                    for s in sensors.iter_mut() {
+                        if ui.toggle_value(&mut s.show, format!("{0} ({1})", s.name.value, s.value.value)).clicked() {
+                            // works, the value is toggled automatically
+                            log::debug!("sensor {0} clicked", s.name());
+                            s.name.reset();
+                        }
+                    }
+                    // update sensors
+                    self.state.sensors = sensors.clone();
+                }
+
+                // General label
+                ui.horizontal(|ui| {
+                    ui.label("General");
+                    ui.add(egui::Separator::default().horizontal());
+                });
+
+                if ui.button("Disconnect all").clicked() {
+                    self.disconnect_all();
+                }
+
+                // exit
+                if ui.button("Close App").clicked() {
+                    log::info!("Closing app. Byebye!");
+                    self.cleanup_and_exit(ctx.clone());
+                }
+            });
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Soil Measurement Sensor Hub");
-            if self.run() < 0 {
-                log::warn!("disconnected from thread, should stop");
-            }
 
             // enable button only when no search is in progress
             if ui.add_enabled(self.state.action != UiAction::Searching, egui::Button::new("Find Sensors"))
@@ -350,6 +399,9 @@ impl eframe::App for MeasureApp {
             let mut sensors = self.state.sensors.clone();
             // one button for each connected sensor
             for s in sensors.iter_mut() {
+                if !s.show {
+                    continue;
+                }
 
                 // idea: have a 'box' per peripheral, with several buttons (read, blink, disconnect)
                 ui.add(egui::Label::new(format!("{0} ({1})", s.name(), s.value())));
