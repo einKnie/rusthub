@@ -51,7 +51,7 @@ pub mod sensor {
             }
         }
 
-        pub fn addr(self) -> BDAddr {
+        pub fn addr(&self) -> BDAddr {
             self.addr
         }
 
