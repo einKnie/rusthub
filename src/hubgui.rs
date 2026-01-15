@@ -384,7 +384,7 @@ impl eframe::App for MeasureApp {
             if self.state.action != UiAction::NoAction {
                 let label = match self.state.action {
                     UiAction::Searching => String::from("Searching"),
-                    UiAction::Connecting(addr) => format!("Connecting ({addr:?})"),
+                    UiAction::Connecting(_) => String::from("Connecting"),
                     _ => String::new(),
                 };
                 ui.horizontal(|ui| {
@@ -407,6 +407,7 @@ impl eframe::App for MeasureApp {
 
                 // idea: have a 'box' per peripheral, with several buttons (read, blink, disconnect)
                 ui.add(egui::Label::new(format!("{0} ({1})", s.name(), s.value())));
+                ui.add(egui::Label::new(format!("{0}", s.addr())));
                 if ui.button("Read").clicked() {
                     self.read_sensor(s.addr);
                 }
