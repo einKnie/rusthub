@@ -648,6 +648,21 @@ pub mod peripheral {
             if self.central.as_ref().unwrap().stop_scan().await.is_err() {
                 log::warn!("Failed to stop Scan");
             }
+
+            // stop any notification threads
+            log::debug!("stop any running notification threads");
+            for tx in self.subscriptions.values() {
+                tx.send(HubMsg::StopThread).unwrap();
+            }
+
+            // disconnect all peripherals
+            log::debug!("disconnect all sensors");
+            for mut p in self.sensors.clone() {
+                if p.disconnect().await.is_err() {
+                    log::warn!("Disconnect failed ({0})", p.addr);
+                }
+            }
+
             1
         }
     }
