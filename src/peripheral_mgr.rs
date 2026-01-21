@@ -132,11 +132,10 @@ pub mod peripheral {
 
         /// Find all SensorPeripherals
         ///
-        /// Check all bluetooth peripherals. If one matches with our spec, then connect to it and add to vector
+        /// Check all bluetooth peripherals. If one matches with our spec, add to vector
         /// (at this point this is basically a backup, but the sensor usually advertises itself anyway through the bt event channel)
         async fn find_sensors(&mut self) -> Result<(), PeripheralError> {
             let prevlen = self.sensors.len();
-            log::info!("known sensors: {prevlen:?}");
 
             for p in self.central.as_ref().unwrap().peripherals().await.unwrap() {
                 if p.properties()
@@ -147,25 +146,13 @@ pub mod peripheral {
                     .iter()
                     .any(|name| name.contains("MoistureSensor"))
                 {
-                    log::debug!("found sensor device!");
                     let addr = p.properties().await.unwrap().unwrap().address;
 
                     if self.sensors.iter().any(|p| p.addr == addr) {
-                        log::debug!("Sensor already known!");
                         continue;
                     }
 
-                    match p.connect().await {
-                        Ok(_) => log::debug!("connected"),
-                        Err(e) => {
-                            log::warn!("Failed to connect to sensor! {:?}", e);
-                            return Err(PeripheralError::ConnectionError);
-                        }
-                    };
-
-                    log::debug!("Connected to sensor device");
-                    log::debug!("Peripheral id: {:?}", p.id());
-                    log::debug!("hw addr: {:?}", addr);
+                    log::debug!("found new sensor device! ({addr:?})");
                     self.sensors.push(SensorPeripheral::new(p, addr));
                 }
             }
