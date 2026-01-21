@@ -64,7 +64,7 @@ impl SensorPeripheral {
                 return Err(PeripheralError::ConnectionError);
             }
         } {
-            log::info!("already connected!");
+            log::debug!("already connected!");
             return Ok(());
         }
 
@@ -72,13 +72,9 @@ impl SensorPeripheral {
             Ok(_) => {
                 log::debug!("Connected to sensor device");
                 log::debug!("Peripheral id: {:?}", self.peripheral.id());
-                log::debug!("Properties:");
-                let addr = self.peripheral.properties().await.unwrap().unwrap().address;
-                log::debug!("{:?}", addr);
                 Ok(())
             },
-            Err(e) => {
-                log::warn!("Failed to connect to sensor! {:?}", e);
+            Err(_) => {
                 Err(PeripheralError::ConnectionError)
             }
         }
@@ -92,17 +88,13 @@ impl SensorPeripheral {
                 return Err(PeripheralError::ConnectionError);
             }
         } {
-            log::info!("already disconnected!");
+            log::debug!("already disconnected!");
             return Ok(());
         }
 
         match self.peripheral.disconnect().await {
-            Ok(_) => {
-                log::debug!("disconnected");
-                Ok(())
-            },
-            Err(e) => {
-                log::warn!("Failed to disconnect from sensor {:?}: {:?}", self, e);
+            Ok(_) => Ok(()),
+            Err(_) => {
                 Err(PeripheralError::ConnectionError)
             }
         }
@@ -120,37 +112,25 @@ impl SensorPeripheral {
         match action {
             PeripheralAction::Write(data) => {
                 match self.write(ch, data).await {
-                    Ok(_) => {
-                        log::debug!("Write success");
-                        Ok(ActionResult::Success)
-                    },
+                    Ok(_) => Ok(ActionResult::Success),
                     Err(e) => Err(e)
                 }
             },
             PeripheralAction::Read => {
                 match self.read(ch).await {
-                    Ok(val) => {
-                        log::debug!("Read success: {val:?}");
-                        Ok(ActionResult::Data(val))
-                    },
+                    Ok(val) => Ok(ActionResult::Data(val)),
                     Err(e) => Err(e),
                 }
             },
             PeripheralAction::Subscribe => {
                 match self.subscribe(ch).await {
-                    Ok(_) => {
-                        log::debug!("Subscribe success");
-                        Ok(ActionResult::Success)
-                    },
+                    Ok(_) => Ok(ActionResult::Success),
                     Err(e) => Err(e),
                 }
             },
             PeripheralAction::Unsubscribe => {
                 match self.unsubscribe(ch).await {
-                    Ok(_) => {
-                        log::debug!("Unsubscribe success");
-                        Ok(ActionResult::Success)
-                    },
+                    Ok(_) => Ok(ActionResult::Success),
                     Err(e) => Err(e),
                 }
             }

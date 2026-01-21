@@ -120,7 +120,7 @@ pub mod peripheral {
                     Err(_) => return Err(PeripheralError::NoAdapter)
                 };
                 if adapters.is_empty() {
-                    log::warn!("No bluetooth adapter found");
+                    log::error!("No bluetooth adapter found");
                     return Err(PeripheralError::NoAdapter);
                 }
 
@@ -302,7 +302,6 @@ pub mod peripheral {
                     return Err(PeripheralError::IOError);
                 }
             };
-            log::info!("Read from sensor: {data:?}");
             Ok(data)
         }
 
@@ -389,7 +388,7 @@ pub mod peripheral {
             let mut stream = match p.peripheral.notifications().await {
                 Ok(s) => s,
                 Err(e) => {
-                    log::warn!("Could not get notification stream from peripheral: {e:?}");
+                    log::error!("Could not get notification stream from peripheral: {e:?}");
                     panic!("Could not get notification stream");
                 }
             };
@@ -439,7 +438,7 @@ pub mod peripheral {
                     return 0;
                 }
             };
-            log::info!("CentralState: {:?}", central_state);
+            log::debug!("CentralState: {:?}", central_state);
 
             // Each adapter has an event stream, we fetch via events(),
             // simplifying the type, this will return what is essentially a
@@ -455,7 +454,7 @@ pub mod peripheral {
             // start scanning for devices
             self.central.as_ref().unwrap().start_scan(ScanFilter::default()).await.unwrap();
 
-            log::info!("event handler intialized!");
+            log::debug!("event handler intialized!");
 
             loop {
                 // check for a bluetooth event  - with timeout making this non-blocking
@@ -493,13 +492,7 @@ pub mod peripheral {
                             let addr = properties.as_ref().unwrap().address;
 
                             if self.sensors.iter().any(|p| p.addr == addr) {
-                                // we only care about known sensors here
-                                let name = properties
-                                    .and_then(|p| p.local_name)
-                                    .map(|local_name| local_name.to_string())
-                                    .unwrap_or_default();
-
-                                log::info!("DeviceConnected: {:?} {}", addr, name);
+                                log::info!("DeviceConnected: {:?}", addr);
                                 self.tx.send(EventMsg::DeviceConnected(addr)).unwrap();
                             }
                         },
@@ -604,7 +597,7 @@ pub mod peripheral {
                     },
                     Err(TryRecvError::Empty) => (),
                     Err(TryRecvError::Disconnected) => {
-                        log::info!("disconnected from main! Stopping");
+                        log::debug!("disconnected from main! Stopping");
                         break;
                     }
                 };
