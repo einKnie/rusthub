@@ -159,18 +159,20 @@ impl ConnectedSensor {
 ///
 /// enum denoting currently running actions
 /// mostly used for displaying spinner
+#[allow(unused)]
 #[derive(Clone, Debug, PartialEq)]
-enum UiAction {
-    NoAction,
-    Searching,
-    Connecting(BDAddr),
+enum GuiAction {
+    Search,
+    Connect,
+    Read(BDAddr),
+    Blink(BDAddr),
+    Subscribe(BDAddr),
 }
 
 /// App state
 #[derive(Clone, Debug)]
 struct MeasureAppState {
     sensors: Vec<ConnectedSensor>,
-    action: UiAction,
     pending: Vec<PeripheralCmd>,
 }
 
@@ -187,7 +189,7 @@ impl MeasureApp {
         Self {
             tx,
             rx,
-            state: MeasureAppState {sensors: Vec::<ConnectedSensor>::new(), action: UiAction::NoAction, pending: vec![]},
+            state: MeasureAppState {sensors: Vec::<ConnectedSensor>::new(), pending: vec![]},
         }
     }
 
@@ -196,7 +198,6 @@ impl MeasureApp {
 
         let cmd = PeripheralCmd::new(HubCmd::FindSensors);
         self.state.pending.push(cmd.clone());
-        self.state.action = UiAction::Searching;
         self.tx.send(cmd).unwrap();
     }
 
@@ -226,7 +227,6 @@ impl MeasureApp {
 
         let cmd = PeripheralCmd::new(HubCmd::Connect(addr));
         self.state.pending.push(cmd.clone());
-        self.state.action = UiAction::Connecting(addr);
         self.tx.send(cmd).unwrap();
     }
 
@@ -315,7 +315,6 @@ impl MeasureApp {
                             subscribed: false,
                             show: false,
                         });
-                        self.state.action = UiAction::NoAction;
                     }
                     HubEvent::DeviceDisconnected(addr) => {
                         log::info!("Async Device Disconnected: {addr:?}");
@@ -361,10 +360,8 @@ impl MeasureApp {
                 match val {
                     HubResp::Failed => {
                         log::debug!("Command failed");
-                        self.state.action = UiAction::NoAction;
                     },
                     HubResp::Success => {
-                        self.state.action = UiAction::NoAction;
                     },
                     HubResp::ReadData(addr, data) => {
                         log::info!("received read sensor data for {addr:?}");
@@ -383,6 +380,47 @@ impl MeasureApp {
             }
         }
         0
+    }
+
+    /// Any Pending Commands
+    ///
+    /// Check if any commands to PeripheralMgr are open
+    /// Response depends on the `action`,
+    /// if None, any pending command returns true
+    /// if Some, only pending commands falling in the command category return true
+    fn any_pending(&self, action: Option<GuiAction>) -> bool {
+        match action {
+            None => !self.state.pending.is_empty(),
+            Some(GuiAction::Search) => {
+                self.state.pending.iter().any(|p| {
+                    matches!(p.msg, HubCmd::FindSensors)
+                })
+            },
+            Some(GuiAction::Connect) => {
+                self.state.pending.iter().any(|p| {
+                    matches!(p.msg, HubCmd::ConnectAll | HubCmd::Connect(_))
+                })
+            },
+            Some(GuiAction::Read(addr)) => {
+                self.state.pending.iter().any(|p| {
+                    matches!(p.msg, HubCmd::ReadFrom(a) if a == addr)
+                })
+            },
+            Some(GuiAction::Blink(addr)) => {
+                self.state.pending.iter().any(|p| {
+                    match p.msg {
+                        HubCmd::Blink(a) if a == addr => true,
+                        HubCmd::BlinkAll => true,
+                        _ => false
+                    }
+                })
+            },
+            Some(GuiAction::Subscribe(addr)) => {
+                self.state.pending.iter().any(|p| {
+                    matches!(p.msg, HubCmd::Subscribe(a) if a == addr)
+                })
+            }
+        }
     }
 }
 
@@ -448,29 +486,16 @@ impl eframe::App for MeasureApp {
             ui.heading("Soil Measurement Sensor Hub");
 
             // enable button only when no search is in progress
-            if ui.add_enabled(self.state.action != UiAction::Searching, egui::Button::new("Find Sensors"))
+            if ui.add_enabled(!self.any_pending(Some(GuiAction::Search)), egui::Button::new("Find Sensors"))
                 .clicked()
             {
                 self.find_sensors();
             }
             // enable button only when no search is in progress
-            if ui.add_enabled(self.state.action == UiAction::NoAction, egui::Button::new("Connect"))
+            if ui.add_enabled(!self.any_pending(Some(GuiAction::Connect)), egui::Button::new("Connect"))
                 .clicked()
             {
                 self.connect_all();
-            }
-
-            // show spinner while action in progress
-            if self.state.action != UiAction::NoAction {
-                let label = match self.state.action {
-                    UiAction::Searching => String::from("Searching"),
-                    UiAction::Connecting(_) => String::from("Connecting"),
-                    _ => String::new(),
-                };
-                ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new());
-                    ui.label(label);
-                });
             }
 
             ui.add(egui::Separator::default());
@@ -488,10 +513,14 @@ impl eframe::App for MeasureApp {
                 // idea: have a 'box' per peripheral, with several buttons (read, blink, disconnect)
                 ui.add(egui::Label::new(format!("{0} ({1})", s.name(), s.value())));
                 ui.add(egui::Label::new(format!("{0}", s.addr())));
-                if ui.button("Read").clicked() {
+                if ui.add_enabled(!self.any_pending(Some(GuiAction::Read(s.addr))), egui::Button::new("Read"))
+                    .clicked()
+                {
                     self.read_sensor(s.addr);
                 }
-                if ui.button("Blink").clicked() {
+                if ui.add_enabled(!self.any_pending(Some(GuiAction::Blink(s.addr))), egui::Button::new("Blink"))
+                    .clicked()
+                {
                     self.blink(s.addr);
                 }
 
@@ -540,6 +569,21 @@ impl eframe::App for MeasureApp {
                 if ui.button("Close App").clicked() {
                     log::info!("Closing app. Byebye!");
                     self.cleanup_and_exit(ctx.clone());
+                }
+
+                // show spinner while action in progress
+                if self.any_pending(None) {
+                    let label = if self.any_pending(Some(GuiAction::Connect)) {
+                        String::from("Connecting")
+                    } else if self.any_pending(Some(GuiAction::Search)) {
+                        String::from("Searching")
+                    } else {
+                        String::new()
+                    };
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Spinner::new());
+                        ui.label(label);
+                    });
                 }
             });
 
