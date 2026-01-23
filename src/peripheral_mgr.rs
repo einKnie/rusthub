@@ -4,6 +4,7 @@ pub mod message;
 
 pub mod peripheral {
     use crate::peripheral_mgr::error::PeripheralError;
+    use crate::peripheral_mgr::message::{HubCmd, HubResp, HubEvent, PeripheralCmd, PeripheralMsg};
     use crate::peripheral_mgr::sensor::{SensorPeripheral, PeripheralAction, ActionResult};
 
     use btleplug::api::{Central, CentralEvent, Manager as _, Peripheral as _, BDAddr, ScanFilter};
@@ -22,48 +23,10 @@ pub mod peripheral {
     const LED_CHARACTERISTIC_UUID: Uuid = uuid!("d9feb5df-b55f-44ef-b307-63893c5f67e5");
     const SENSOR_CHARACTERISTIC_UUID: Uuid = uuid!("d9feb5df-b55f-44ef-b307-63893c5f67e6");
 
-    /// Event Message
-    ///
-    /// Sent from PeripheralMgr on bluetooth event
-    /// @todo this should probably be changed to contain the peripheral id instead, since that makes more sense
-    /// since we get the id automatically with the event *and* we can identify a peripheral much more easily via the id than the address
-    /// only thing i need to check is that the id is actually as unique as the address...
-    #[derive(Debug)]
-    pub enum EventMsg {
-        DeviceDiscovered(BDAddr),
-        DeviceConnected(BDAddr),
-        DeviceDisconnected(BDAddr),
-        ServiceDiscovered(BDAddr),
-        SearchFailed,
-        NewData(BDAddr, u32),
-    }
-
-    /// Hub Message
-    ///
-    /// Sent from main to the PeripheralMgr
-    /// To be used for thread control as well as peripheral commands
-    /// @todo this should be split in two enums, per usecase
-    /// since I will want to reuse the thread control msgs also for other threads
-    /// @todo find out how i can check for two types in one stream (box? trait? can en enum impl a trait, even?)
-    #[derive(Debug)]
-    pub enum HubMsg {
-        StopThread,
-        Ping,
-        BlinkAll,
-        Blink(BDAddr),
-        ReadFrom(BDAddr),
-        Subscribe(BDAddr),
-        Unsubscribe(BDAddr),
-        FindSensors,
-        Connect(BDAddr),
-        ConnectAll,
-        Disconnect(BDAddr),
-    }
-
     /// Run the Peripheral Manager
     ///
     /// Init and run the Mgr; this should be run as a separate thread
-    pub async fn mgr_run(tx: Sender<EventMsg>, rx: Receiver<HubMsg>) -> u32 {
+    pub async fn mgr_run(tx: Sender<PeripheralMsg>, rx: Receiver<PeripheralCmd>) -> u32 {
         // init the manager
         let mut mgr = PeripheralMgr::new(tx, rx);
         if mgr.init().await.is_ok() {
@@ -73,7 +36,6 @@ pub mod peripheral {
         0
     }
 
-
     /// Peripheral Manager
     ///
     /// Manager for Peripheral devices
@@ -82,10 +44,10 @@ pub mod peripheral {
     pub struct PeripheralMgr {
         central: Option<Adapter>,
         sensors: Vec<SensorPeripheral>,
-        subscriptions: HashMap<BDAddr, Sender<HubMsg>>,
+        subscriptions: HashMap<BDAddr, Sender<PeripheralCmd>>,
 
-        tx: Sender<EventMsg>,
-        rx: Receiver<HubMsg>,
+        tx: Sender<PeripheralMsg>,
+        rx: Receiver<PeripheralCmd>,
     }
 
     impl std::fmt::Display for PeripheralMgr {
@@ -96,7 +58,7 @@ pub mod peripheral {
 
     impl PeripheralMgr {
 
-        pub fn new( tx: Sender<EventMsg>, rx: Receiver<HubMsg>) -> Self {
+        pub fn new(tx: Sender<PeripheralMsg>, rx: Receiver<PeripheralCmd>) -> Self {
             Self {
                 central: None,
                 sensors: Vec::<SensorPeripheral>::new(),
@@ -364,7 +326,7 @@ pub mod peripheral {
             // stop notification thread (and remove entry from hashmap in the process)
             match self.subscriptions.remove(&addr) {
                 Some(tx) => {
-                    tx.send(HubMsg::StopThread).unwrap();
+                    tx.send(PeripheralCmd::new(HubCmd::StopThread)).unwrap();
                 },
                 None => {
                     log::debug!("subscription not found in current subscriptions");
@@ -382,7 +344,7 @@ pub mod peripheral {
         ///
         /// @todo Is there a way to combine the stream and receiver for a blocking wait on both?
         /// that would improve performance (not that there's any issues so far)
-        pub async fn handle_notifications(p: SensorPeripheral, tx: Sender<EventMsg>, rx: Receiver<HubMsg>) -> u32 {
+        pub async fn handle_notifications(p: SensorPeripheral, tx: Sender<PeripheralMsg>, rx: Receiver<PeripheralCmd>) -> u32 {
 
             log::debug!("Hello from notification thread for [{0}]", p.addr);
 
@@ -396,7 +358,7 @@ pub mod peripheral {
 
             loop {
                 // Check for Stop msg from caller
-                if let Ok(HubMsg::StopThread) = rx.try_recv() {
+                if let Ok(PeripheralCmd{id: _ , msg: HubCmd::StopThread}) = rx.try_recv() {
                     log::info!("received stop command from main");
                     break;
                 }
@@ -416,7 +378,7 @@ pub mod peripheral {
                         }
                     };
                     log::debug!("sending data to hub: {d:?}");
-                    tx.send(EventMsg::NewData(p.addr, d)).unwrap();
+                    tx.send(PeripheralMsg::Event(HubEvent::NewData(p.addr, d))).unwrap();
                 }
             }
 
@@ -481,7 +443,7 @@ pub mod peripheral {
 
                                 // add new sensor to list and inform hub
                                 self.sensors.push(SensorPeripheral::new(peripheral, addr));
-                                self.tx.send(EventMsg::DeviceDiscovered(addr)).unwrap();
+                                self.tx.send(PeripheralMsg::Event(HubEvent::DeviceDiscovered(addr))).unwrap();
                             }
                         },
                         CentralEvent::StateUpdate(state) => {
@@ -494,7 +456,7 @@ pub mod peripheral {
 
                             if self.sensors.iter().any(|p| p.addr == addr) {
                                 log::info!("DeviceConnected: {:?}", addr);
-                                self.tx.send(EventMsg::DeviceConnected(addr)).unwrap();
+                                self.tx.send(PeripheralMsg::Event(HubEvent::DeviceConnected(addr))).unwrap();
                             }
                         },
                         CentralEvent::DeviceDisconnected(id) => {
@@ -506,17 +468,7 @@ pub mod peripheral {
                             // peripheral name is not consistently available here, so let's compare address
                             if self.sensors.iter().any(|p| p.addr == addr) {
                                 log::info!("DeviceDisconnected: {:?}", addr);
-                                self.tx.send(EventMsg::DeviceDisconnected(addr)).unwrap();
-                            }
-                        },
-                        CentralEvent::ServicesAdvertisement { id, services } => {
-                            if let Some(services) =
-                                services.into_iter().find(|&s| s.eq(&LED_CHARACTERISTIC_UUID)) {
-                                let peripheral = self.central.as_ref().unwrap().peripheral(&id).await.unwrap();
-                                let properties = peripheral.properties().await.unwrap();
-                                let addr = properties.unwrap().address;
-                                log::info!("ServicesAdvertisement: {:?}, {:?}", id, services);
-                                self.tx.send(EventMsg::ServiceDiscovered(addr)).unwrap();
+                                self.tx.send(PeripheralMsg::Event(HubEvent::DeviceDisconnected(addr))).unwrap();
                             }
                         },
                         // let's ignore other events for now
@@ -526,76 +478,81 @@ pub mod peripheral {
 
                 // now let's check if something came in from main
                 match self.rx.try_recv() {
-                    Ok(HubMsg::StopThread) => {
-                        log::info!("received stop command from main");
-                        break;
-                    },
-                    Ok(HubMsg::Ping) => {
-                        log::info!("received Ping from main");
-                        log::debug!("Peripheral-mgr managing the following peripherals:");
-                        for s in self.sensors.iter() {
-                            log::debug!("{s}");
-                        }
-                    }
-                    Ok(HubMsg::BlinkAll) => {
-                        log::info!("blinking all sensors");
-                        if self.blinky_all().await.is_err() {
-                            log::warn!("BlinkAll failed");
-                        }
-                    },
-                    Ok(HubMsg::Blink(addr)) => {
-                        log::info!("blinking led on peripheral ({addr:?})");
-                        if self.blink(addr).await.is_err() {
-                            log::warn!("Blink failed for {addr:?}");
-                        }
-                    },
-                    Ok(HubMsg::ReadFrom(addr)) => {
-                        log::info!("Reading from periphaeral ({addr:?})");
-                        match self.read(addr).await {
-                            Err(_) => {
-                                log::warn!("Failed to read from sensor ({addr:?})");
+                    Ok(cmd) => {
+                        match cmd.msg {
+                            HubCmd::StopThread => {
+                                log::info!("received stop command from main");
+                                break;
                             },
-                            Ok(res) => {
-                                log::info!("sending new value ({res:?}) to hub");
-                                self.tx.send(EventMsg::NewData(addr, res)).unwrap();
+                            HubCmd::Ping => {
+                                log::info!("received Ping from main");
+                                log::debug!("Peripheral-mgr managing the following peripherals:");
+                                for s in self.sensors.iter() {
+                                    log::debug!("{s}");
+                                }
                             }
-                        }
-                    }
-                    Ok(HubMsg::Subscribe(addr)) => {
-                        if self.subscribe(addr).await.is_err() {
-                            log::warn!("Failed to subscribe to sensor data!");
+                            HubCmd::BlinkAll => {
+                                log::info!("blinking all sensors");
+                                if self.blinky_all().await.is_err() {
+                                    log::warn!("BlinkAll failed");
+                                }
+                            },
+                            HubCmd::Blink(addr) => {
+                                log::info!("blinking led on peripheral ({addr:?})");
+                                if self.blink(addr).await.is_err() {
+                                    log::warn!("Blink failed for {addr:?}");
+                                }
+                            },
+                            HubCmd::ReadFrom(addr) => {
+                                log::info!("Reading from periphaeral ({addr:?})");
+                                match self.read(addr).await {
+                                    Err(_) => {
+                                        log::warn!("Failed to read from sensor ({addr:?})");
+                                    },
+                                    Ok(res) => {
+                                        log::info!("sending new value ({res:?}) to hub");
+                                        self.tx.send(PeripheralMsg::Response(cmd.id, HubResp::NewData(addr, res))).unwrap();
+                                    }
+                                }
+                            }
+                            HubCmd::Subscribe(addr) => {
+                                if self.subscribe(addr).await.is_err() {
+                                    log::warn!("Failed to subscribe to sensor data!");
+                                }
+                            },
+                            HubCmd::Unsubscribe(addr) => {
+                                if self.unsubscribe(addr).await.is_err() {
+                                    log::warn!("Failed to unsubscribe!");
+                                }
+                            },
+                            HubCmd::FindSensors => {
+                                log::info!("looking for sensors");
+                                if self.find_sensors().await.is_err() {
+                                    log::warn!("Finding Sensors failed");
+                                    self.tx.send(PeripheralMsg::Response(cmd.id, HubResp::SearchFailed)).unwrap();
+                                }
+                            },
+                            HubCmd::Connect(addr) => {
+                                log::info!("connecting to peripheral ({addr:?})");
+                                if self.connect(addr).await.is_err() {
+                                    log::warn!("Connection failed ({addr:?})");
+                                }
+                            },
+                            HubCmd::ConnectAll => {
+                                log::debug!("connecting to all known peripherals");
+                                if self.connect_all().await.is_err() {
+                                    log::warn!("Failed to connect to all known peripherals");
+                                }
+                            },
+                            HubCmd::Disconnect(addr) => {
+                                log::info!("Disconnecting from peripheral ({addr:?})");
+                                if self.disconnect(addr).await.is_err() {
+                                    log::warn!("Disconnect failed ({addr:?})");
+                                }
+                            },
                         }
                     },
-                    Ok(HubMsg::Unsubscribe(addr)) => {
-                        if self.unsubscribe(addr).await.is_err() {
-                            log::warn!("Failed to unsubscribe!");
-                        }
-                    },
-                    Ok(HubMsg::FindSensors) => {
-                        log::info!("looking for sensors");
-                        if self.find_sensors().await.is_err() {
-                            log::warn!("Finding Sensors failed");
-                            self.tx.send(EventMsg::SearchFailed).unwrap();
-                        }
-                    },
-                    Ok(HubMsg::Connect(addr)) => {
-                        log::info!("connecting to peripheral ({addr:?})");
-                        if self.connect(addr).await.is_err() {
-                            log::warn!("Connection failed ({addr:?})");
-                        }
-                    },
-                    Ok(HubMsg::ConnectAll) => {
-                        log::debug!("connecting to all known peripherals");
-                        if self.connect_all().await.is_err() {
-                            log::warn!("Failed to connect to all known peripherals");
-                        }
-                    },
-                    Ok(HubMsg::Disconnect(addr)) => {
-                        log::info!("Disconnecting from peripheral ({addr:?})");
-                        if self.disconnect(addr).await.is_err() {
-                            log::warn!("Disconnect failed ({addr:?})");
-                        }
-                    },
+
                     Err(TryRecvError::Empty) => (),
                     Err(TryRecvError::Disconnected) => {
                         log::debug!("disconnected from main! Stopping");
@@ -614,7 +571,7 @@ pub mod peripheral {
             // stop any notification threads
             log::debug!("stop any running notification threads");
             for tx in self.subscriptions.values() {
-                tx.send(HubMsg::StopThread).unwrap();
+                tx.send(PeripheralCmd::new(HubCmd::StopThread)).unwrap();
             }
 
             // disconnect all peripherals
