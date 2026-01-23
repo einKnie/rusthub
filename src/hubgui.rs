@@ -294,9 +294,9 @@ impl MeasureApp {
 
             // handle Event message
             Ok(PeripheralMsg::Event(val)) => {
+                log::debug!("Received event message");
                 dbg!(&val);
 
-                log::debug!("received event message");
                 match val {
                     HubEvent::DeviceDiscovered(addr) => {
                         log::info!("Device Discovered: {addr:?}");
@@ -332,6 +332,7 @@ impl MeasureApp {
 
             // handle Response message
             Ok(PeripheralMsg::Response(id, val)) => {
+                log::debug!("Received response message");
                 dbg!(&val);
 
                 // check if we have a pending cmd with the same id
