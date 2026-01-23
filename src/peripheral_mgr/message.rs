@@ -72,4 +72,15 @@ impl PeripheralCmd {
             msg
         }
     }
+
+    pub fn validate_response(&self, resp: &HubResp) -> bool {
+        // check if HubResp is valid depending on HubCmd
+        match (self.msg.clone(), resp) {
+            // only ReadFrom may return ReadData or Failed, all others return Success or Failed
+            (HubCmd::ReadFrom(_), HubResp::ReadData(_,_) | HubResp::Failed) => (),
+            (_,HubResp::Success | HubResp::Failed) => (),
+            (_,_) => return false,
+        };
+        true
+    }
 }
