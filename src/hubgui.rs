@@ -185,6 +185,8 @@ impl MeasureApp {
     }
 
     fn ping(&self) {
+        log::debug!("GUI managing sensors:");
+        dbg!(&self.state.sensors);
         log::info!("pinging manager");
         self.tx.send(HubMsg::Ping).unwrap();
     }
@@ -349,11 +351,9 @@ impl eframe::App for MeasureApp {
                         self.unsubscribe(s.addr);
                         s.subscribed = false;
                     }
-                } else {
-                    if ui.button("Subscribe").clicked() {
-                        self.subscribe(s.addr);
-                        s.subscribed = true;
-                    }
+                } else if ui.button("Subscribe").clicked() {
+                    self.subscribe(s.addr);
+                    s.subscribed = true;
                 }
 
                 // allow sensor name change
