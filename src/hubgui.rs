@@ -373,23 +373,26 @@ impl eframe::App for MeasureApp {
             // update sensors (in case smth was changed)
             self.state.sensors = sensors.clone();
 
-            if ui.button("Ping").clicked() {
-                self.ping();
-            }
+            // general interface (independent from connected sensors)
+            ui.horizontal(|ui| {
+                if ui.button("Ping").clicked() {
+                    self.ping();
+                }
 
-            if ui.button("Blink all").clicked() {
-                self.blink_all();
-            }
+                if ui.button("Blink all").clicked() {
+                    self.blink_all();
+                }
 
-            if ui.button("Disconnect all").clicked() {
-                self.disconnect_all();
-            }
+                if ui.button("Disconnect all").clicked() {
+                    self.disconnect_all();
+                }
 
-            // exit
-            if ui.button("Close App").clicked() {
-                log::info!("Closing app. Byebye!");
-                self.cleanup_and_exit(ctx.clone());
-            }
+                // exit
+                if ui.button("Close App").clicked() {
+                    log::info!("Closing app. Byebye!");
+                    self.cleanup_and_exit(ctx.clone());
+                }
+            });
 
             // yes, this updates the ui all the time, but this (no na) also causes cpu usage to go up
             // but we actually need this. the entire msg handling loop is also run in here.
