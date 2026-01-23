@@ -35,35 +35,99 @@ pub fn run_gui() -> u32 {
     0
 }
 
+/// SensorName
+///
+/// Represents a connected sensor's name and allows in-flight changes
+/// as well as change cancellation. In-flight changes can be made to .next
+/// and applied to be permanent with .update()
+///
+/// @todo make this more generic? for general use?
+#[derive(Clone, Debug)]
+struct SensorName {
+    value: String,
+    next: String
+}
+
+impl SensorName {
+    fn new(val: String) -> Self {
+        Self {
+            value: val.clone(),
+            next: val.clone(),
+        }
+    }
+
+    /// Update value to next-value
+    fn update(&mut self) {
+        self.value = self.next.clone();
+    }
+
+    /// Reset next-value to value
+    fn reset(&mut self) {
+        self.next = self.value.clone();
+    }
+}
+
+/// SensorValue
+///
+/// Helper class to allow seamless records on value range.
+/// Could be updated to retain more info in the furture, e.g. for charts (though info should be kept on disk not in memory)
+#[derive(Clone, Debug)]
+struct SensorValue {
+    value: u32,
+
+    min: u32,
+    max: u32,
+}
+
+impl SensorValue {
+    fn new(val: u32) -> Self {
+        Self {
+            value: val,
+            min: u32::MAX,
+            max: 0,
+        }
+    }
+
+    /// Update value to next-value
+    /// and update min and max if necessary
+    fn update(&mut self, next: u32) {
+        if next < self.min {
+            self.min = next;
+        }
+        if next > self.max {
+            self.max = next;
+        }
+
+        self.value = next;
+    }
+}
+
 /// Connected Sensor
 ///
 /// Represents one connected sensor with device address and name
 #[derive(Clone, Debug)]
 struct ConnectedSensor {
     addr: BDAddr,
-    name: String,
-    value: u32,
+    name: SensorName,
+    value: SensorValue,
     subscribed: bool,
 }
 
-/// compare by name, could be useful when allowing the user to rename sensors
-/// (although, tbh, the name is representative only, so it does not matter and mutiple sensors *could* have the same name)
 impl PartialEq for ConnectedSensor {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+        self.addr() == other.addr()
     }
 }
 
 impl ConnectedSensor {
-    /// Get and/or set the name
-    /// If a new name is provided, it is set for the sensor
-    /// Either way, the current name is returned
-    pub fn name(&mut self, new: Option<String>) -> String {
-        match new {
-            None => (),
-            Some(new_name) => self.name = new_name,
-        };
-        self.name.clone()
+    /// Get current sensor name
+    pub fn name(&self) -> String {
+        self.name.value.clone()
+    }
+
+    /// Get current sensor value
+    pub fn value(&self) -> u32 {
+        self.value.value
     }
 
     /// Get the sensor's address
@@ -190,15 +254,15 @@ impl MeasureApp {
                     EventMsg::NewData(addr, data) => {
                         log::info!("received new sensor data for {addr:?}");
                         if let Some(p) = self.state.sensors.iter_mut().find(|p| p.addr == addr) {
-                            p.value = data;
+                            p.value.update(data);
                         }
                     }
                     EventMsg::DeviceConnected(addr) => {
                         log::info!("Device Connected: {addr:?}");
                         self.state.sensors.push(ConnectedSensor {
-                            addr: addr,
-                            name: format!("Sensor {:?}", self.state.sensors.len() + 1),
-                            value: 0,
+                            addr,
+                            name: SensorName::new(format!("Sensor {:?}", self.state.sensors.len() + 1)),
+                            value: SensorValue::new(0),
                             subscribed: false,
                         });
                         self.state.action = UiAction::NoAction;
@@ -272,7 +336,7 @@ impl eframe::App for MeasureApp {
             for s in sensors.iter_mut() {
 
                 // idea: have a 'box' per peripheral, with several buttons (read, blink, disconnect)
-                ui.add(egui::Label::new(format!("{0} ({1})", s.name, s.value)));
+                ui.add(egui::Label::new(format!("{0} ({1})", s.name(), s.value())));
                 if ui.button("Read").clicked() {
                     self.read_sensor(s.addr);
                 }
@@ -291,6 +355,17 @@ impl eframe::App for MeasureApp {
                         s.subscribed = true;
                     }
                 }
+
+                // allow sensor name change
+                // TODO: reset name.next to name if apply button is not clicked? e.g. on show changed?
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut s.name.next));
+
+                    if ui.button("Change Name").clicked() {
+                        log::debug!("name change requested");
+                        s.name.update();
+                    }
+                });
 
                 ui.add(egui::Separator::default());
             }
