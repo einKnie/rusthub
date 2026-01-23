@@ -13,11 +13,9 @@ pub mod peripheral {
     use std::time::Duration;
     use tokio::time;
     use uuid::{uuid,Uuid};
-    use crossbeam_channel::{Sender, Receiver, TryRecvError};
+    use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel};
     use futures::stream::StreamExt;
-
     use std::collections::HashMap;
-    use crossbeam_channel::bounded;
 
     /// Specific Characteristic UUID set by Sensor Peripheral
     /// for controlling the sensor LED
@@ -27,7 +25,7 @@ pub mod peripheral {
     /// Run the Peripheral Manager
     ///
     /// Init and run the Mgr; this should be run as a separate thread
-    pub async fn mgr_run(tx: Sender<PeripheralMsg>, rx: Receiver<PeripheralCmd>) -> u32 {
+    pub async fn mgr_run(tx: UnboundedSender<PeripheralMsg>, rx: UnboundedReceiver<PeripheralCmd>) -> u32 {
         // init the manager
         let mut mgr = PeripheralMgr::new(tx, rx);
         if mgr.init().await.is_ok() {
@@ -41,14 +39,14 @@ pub mod peripheral {
     ///
     /// Manager for Peripheral devices
     ///
-    #[derive(Debug,Clone)]
+    #[derive(Debug)]
     pub struct PeripheralMgr {
         central: Option<Adapter>,
         sensors: Vec<SensorPeripheral>,
-        subscriptions: HashMap<BDAddr, Sender<PeripheralCmd>>,
+        subscriptions: HashMap<BDAddr, UnboundedSender<PeripheralCmd>>,
 
-        tx: Sender<PeripheralMsg>,
-        rx: Receiver<PeripheralCmd>,
+        tx: UnboundedSender<PeripheralMsg>,
+        rx: UnboundedReceiver<PeripheralCmd>,
     }
 
     impl std::fmt::Display for PeripheralMgr {
@@ -59,7 +57,7 @@ pub mod peripheral {
 
     impl PeripheralMgr {
 
-        pub fn new(tx: Sender<PeripheralMsg>, rx: Receiver<PeripheralCmd>) -> Self {
+        pub fn new(tx: UnboundedSender<PeripheralMsg>, rx: UnboundedReceiver<PeripheralCmd>) -> Self {
             Self {
                 central: None,
                 sensors: Vec::<SensorPeripheral>::new(),
@@ -293,7 +291,7 @@ pub mod peripheral {
             }
 
             // start notification thread
-            let (mgr_tx, thread_rx) = bounded(4);
+            let (mgr_tx, thread_rx) = unbounded_channel();
             let _handle = tokio::spawn(PeripheralMgr::handle_notifications(p.clone(), self.tx.clone(), thread_rx));
 
             // store Sender in hashmap so we can stop the thread on unsubscribe
@@ -346,7 +344,7 @@ pub mod peripheral {
         ///
         /// @todo Is there a way to combine the stream and receiver for a blocking wait on both?
         /// that would improve performance (not that there's any issues so far)
-        pub async fn handle_notifications(p: SensorPeripheral, tx: Sender<PeripheralMsg>, rx: Receiver<PeripheralCmd>) -> u32 {
+        pub async fn handle_notifications(p: SensorPeripheral, tx: UnboundedSender<PeripheralMsg>, mut rx: UnboundedReceiver<PeripheralCmd>) -> u32 {
 
             log::debug!("Hello from notification thread for [{0}]", p.addr);
 
@@ -359,28 +357,26 @@ pub mod peripheral {
             };
 
             loop {
-                // Check for Stop msg from caller
-                if let Ok(PeripheralCmd{id: _ , msg: HubCmd::StopThread}) = rx.try_recv() {
-                    log::info!("received stop command from main");
-                    break;
-                }
-
-                // check if there's a notification pending
-                if let Ok(Some(data)) = time::timeout(Duration::from_millis(1), stream.next()).await {
-                //while let Some(data) = stream.next().await {
-                    log::debug!("Received data notification from sensor!");
-                    let d = match <[u8;4]>::try_from(&data.value[..4]) {
-                        Ok(arr) => u32::from_le_bytes(arr),
-                        Err(_) => {
-                            log::debug!("invalid value notification received: {data:?}");
-                            // ignore for now, so far this case has never happened and
-                            // if it occurs i want to know if this even is a stop condition
-                            // or e.g. the next value would be ok again
-                            continue;
-                        }
-                    };
-                    log::debug!("sending data to hub: {d:?}");
-                    tx.send(PeripheralMsg::Event(HubEvent::NewData(p.addr, d))).unwrap();
+                tokio::select! {
+                    Some(msg) = stream.next() => {
+                        log::debug!("Received data notification from sensor!");
+                        let d = match <[u8;4]>::try_from(&msg.value[..4]) {
+                            Ok(arr) => u32::from_le_bytes(arr),
+                            Err(_) => {
+                                log::debug!("invalid value notification received: {msg:?}");
+                                // ignore for now, so far this case has never happened and
+                                // if it occurs i want to know if this even is a stop condition
+                                // or e.g. the next value would be ok again
+                                continue;
+                            }
+                        };
+                        log::debug!("sending data to hub: {d:?}");
+                        tx.send(PeripheralMsg::Event(HubEvent::NewData(p.addr, d))).unwrap();
+                    },
+                    Some(PeripheralCmd{id: _ , msg: HubCmd::StopThread}) = rx.recv() => {
+                        log::info!("received stop command from main");
+                        break;
+                    }
                 }
             }
 
@@ -628,82 +624,73 @@ pub mod peripheral {
             log::debug!("event handler intialized!");
 
             loop {
-                // check for a bluetooth event  - with timeout making this non-blocking
-                if let Ok(Some(event)) = time::timeout(Duration::from_nanos(1), events.next()).await {
-                    match event {
-                        CentralEvent::DeviceDiscovered(id) => {
-                            let peripheral = match self.central.as_ref().unwrap().peripheral(&id).await {
-                                Ok(p) => p,
-                                Err(_) => {
-                                    continue;
+                tokio::select! {
+                    Some(msg) = events.next() => {
+                        match msg {
+                            CentralEvent::DeviceDiscovered(id) => {
+                                let peripheral = match self.central.as_ref().unwrap().peripheral(&id).await {
+                                    Ok(p) => p,
+                                    Err(_) => {
+                                        continue;
+                                    }
+                                };
+                                let properties = peripheral.properties().await.unwrap();
+                                let addr = properties.as_ref().unwrap().address;
+
+                                let name = properties
+                                    .and_then(|p| p.local_name)
+                                    .map(|local_name| local_name.to_string())
+                                    .unwrap_or_default();
+                                // we only care about our sensor here
+                                if name.contains("MoistureSensor") {
+                                    log::info!("DeviceDiscovered: {:?} {}", addr, name);
+
+                                    // add new sensor to list and inform hub
+                                    self.sensors.push(SensorPeripheral::new(peripheral, addr));
+                                    self.tx.send(PeripheralMsg::Event(HubEvent::DeviceDiscovered(addr))).unwrap();
                                 }
-                            };
-                            let properties = peripheral.properties().await.unwrap();
-                            let addr = properties.as_ref().unwrap().address;
+                            },
+                            CentralEvent::StateUpdate(state) => {
+                                log::info!("AdapterStatusUpdate {:?}", state);
+                            },
+                            CentralEvent::DeviceConnected(id) => {
+                                let peripheral = self.central.as_ref().unwrap().peripheral(&id).await.unwrap();
+                                let properties = peripheral.properties().await.unwrap();
+                                let addr = properties.as_ref().unwrap().address;
 
-                            let name = properties
-                                .and_then(|p| p.local_name)
-                                .map(|local_name| local_name.to_string())
-                                .unwrap_or_default();
-                            // we only care about our sensor here
-                            if name.contains("MoistureSensor") {
-                                log::info!("DeviceDiscovered: {:?} {}", addr, name);
+                                if self.sensors.iter().any(|p| p.addr == addr) {
+                                    log::info!("DeviceConnected: {:?}", addr);
+                                    self.tx.send(PeripheralMsg::Event(HubEvent::DeviceConnected(addr))).unwrap();
+                                }
+                            },
+                            CentralEvent::DeviceDisconnected(id) => {
+                                let peripheral = self.central.as_ref().unwrap().peripheral(&id).await.unwrap();
+                                let properties = peripheral.properties().await.unwrap();
+                                let addr = properties.as_ref().unwrap().address;
 
-                                // add new sensor to list and inform hub
-                                self.sensors.push(SensorPeripheral::new(peripheral, addr));
-                                self.tx.send(PeripheralMsg::Event(HubEvent::DeviceDiscovered(addr))).unwrap();
-                            }
-                        },
-                        CentralEvent::StateUpdate(state) => {
-                            log::info!("AdapterStatusUpdate {:?}", state);
-                        },
-                        CentralEvent::DeviceConnected(id) => {
-                            let peripheral = self.central.as_ref().unwrap().peripheral(&id).await.unwrap();
-                            let properties = peripheral.properties().await.unwrap();
-                            let addr = properties.as_ref().unwrap().address;
-
-                            if self.sensors.iter().any(|p| p.addr == addr) {
-                                log::info!("DeviceConnected: {:?}", addr);
-                                self.tx.send(PeripheralMsg::Event(HubEvent::DeviceConnected(addr))).unwrap();
-                            }
-                        },
-                        CentralEvent::DeviceDisconnected(id) => {
-                            let peripheral = self.central.as_ref().unwrap().peripheral(&id).await.unwrap();
-                            let properties = peripheral.properties().await.unwrap();
-                            let addr = properties.as_ref().unwrap().address;
-
-                            // check if the disconnected device is known to us
-                            // peripheral name is not consistently available here, so let's compare address
-                            if self.sensors.iter().any(|p| p.addr == addr) {
-                                log::info!("DeviceDisconnected: {:?}", addr);
-                                self.tx.send(PeripheralMsg::Event(HubEvent::DeviceDisconnected(addr))).unwrap();
-                            }
-                        },
-                        // let's ignore other events for now
-                        _ => ()
-                    }
-                }
-
-                // now let's check if something came in from main
-                match self.rx.try_recv() {
-                    Ok(cmd) => {
-                        match cmd.msg {
+                                // check if the disconnected device is known to us
+                                // peripheral name is not consistently available here, so let's compare address
+                                if self.sensors.iter().any(|p| p.addr == addr) {
+                                    log::info!("DeviceDisconnected: {:?}", addr);
+                                    self.tx.send(PeripheralMsg::Event(HubEvent::DeviceDisconnected(addr))).unwrap();
+                                }
+                            },
+                            // let's ignore other events for now
+                            _ => ()
+                        }
+                    },
+                    Some(msg) = self.rx.recv() => {
+                        match msg.msg {
                             HubCmd::StopThread => {
                                 log::info!("received stop command from main");
                                 break;
                             },
                             ref _other => {
-                                self.handle_cmd(cmd).await;
+                                self.handle_cmd(msg).await;
                             }
                         }
-                    },
-
-                    Err(TryRecvError::Empty) => (),
-                    Err(TryRecvError::Disconnected) => {
-                        log::debug!("disconnected from main! Stopping");
-                        break;
                     }
-                };
+                }
             }
 
             log::debug!("PeripheralMgr::run() cleaning up");

@@ -1,7 +1,9 @@
 use crate::peripheral_mgr::peripheral;
 use crate::peripheral_mgr::message::{HubCmd, HubResp, HubEvent, PeripheralCmd, PeripheralMsg};
 use btleplug::api::BDAddr;
-use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
+use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel};
+use tokio::sync::mpsc::error::TryRecvError;
+
 use eframe::egui::global_theme_preference_switch;
 
 /// Run the measurent GUI
@@ -9,8 +11,8 @@ use eframe::egui::global_theme_preference_switch;
 /// This is basically the only thing we run from main at this point
 pub async fn run_gui() -> u32 {
 
-    let (gui_tx, thread_rx) = bounded(4);
-    let (thread_tx, gui_rx) = bounded(4);
+    let (gui_tx, thread_rx) = unbounded_channel();
+    let (thread_tx, gui_rx) = unbounded_channel();
 
     let mgr_handle = tokio::spawn(peripheral::mgr_run(thread_tx, thread_rx));
 
@@ -178,14 +180,14 @@ struct MeasureAppState {
 
 /// Measurement GUI
 struct MeasureApp {
-    rx: Receiver<PeripheralMsg>,
-    tx: Sender<PeripheralCmd>,
+    rx: UnboundedReceiver<PeripheralMsg>,
+    tx: UnboundedSender<PeripheralCmd>,
 
     state: MeasureAppState,
 }
 
 impl MeasureApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>, tx: Sender<PeripheralCmd>, rx: Receiver<PeripheralMsg>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>, tx: UnboundedSender<PeripheralCmd>, rx: UnboundedReceiver<PeripheralMsg>) -> Self {
         Self {
             tx,
             rx,
