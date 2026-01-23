@@ -378,7 +378,6 @@ impl MeasureApp {
             // handle (or ignore) errors
             Err(TryRecvError::Empty) => (),
             Err(TryRecvError::Disconnected) => {
-                log::warn!("disconnected from thread!");
                 return -1;
             }
         }
@@ -433,7 +432,18 @@ impl eframe::App for MeasureApp {
 
         // run message handling
         if self.run() < 0 {
-            log::warn!("disconnected from thread, should stop");
+            // show info dialog, then exit
+            egui::containers::Modal::new(egui::Id::new("modal dialog")).show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.label("The PeripheralMgr thread has run into an issue.\nPlease check your Bluetooth adapter and restart the program.");
+                    if ui.button("Ok").clicked() {
+                        let c = ctx.clone();
+                        std::thread::spawn(move || {
+                            c.send_viewport_cmd(egui::ViewportCommand::Close);
+                        });
+                    }
+                });
+            });
         }
 
         egui::SidePanel::left("left panel").show(ctx, |ui| {
