@@ -1,5 +1,6 @@
 pub mod sensor;
 pub mod error;
+pub mod message;
 
 pub mod peripheral {
     use crate::peripheral_mgr::error::PeripheralError;
