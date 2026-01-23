@@ -17,7 +17,9 @@ impl std::fmt::Display for PeripheralError {
         match self {
             PeripheralError::NoAdapter => write!(f, "No Bluetooth adapter found"),
             PeripheralError::NoPeripheral => write!(f, "No MoistureSensor found"),
-            PeripheralError::NoCharacteristic => write!(f, "BLE Characteristic not found on sensor device"),
+            PeripheralError::NoCharacteristic => {
+                write!(f, "BLE Characteristic not found on sensor device")
+            }
             PeripheralError::ReadFailed => write!(f, "Read failed"),
             PeripheralError::IOError => write!(f, "Read/Write error"),
             PeripheralError::ConnectionError => write!(f, "Connection error"),
@@ -29,7 +31,6 @@ impl std::fmt::Display for PeripheralError {
 impl Error for PeripheralError {}
 
 impl PeripheralError {
-
     /// Return a boxed instance
     ///
     /// not really needed anymore

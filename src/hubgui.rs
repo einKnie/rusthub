@@ -1,8 +1,8 @@
+use crate::peripheral_mgr::message::{HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg};
 use crate::peripheral_mgr::peripheral;
-use crate::peripheral_mgr::message::{HubCmd, HubResp, HubEvent, PeripheralCmd, PeripheralMsg};
 use btleplug::api::BDAddr;
-use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel};
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use eframe::egui::global_theme_preference_switch;
 
@@ -10,7 +10,6 @@ use eframe::egui::global_theme_preference_switch;
 ///
 /// This is basically the only thing we run from main at this point
 pub async fn run_gui() -> u32 {
-
     let (gui_tx, thread_rx) = unbounded_channel();
     let (thread_tx, gui_rx) = unbounded_channel();
 
@@ -21,7 +20,7 @@ pub async fn run_gui() -> u32 {
         Some(mut home_dir) => {
             home_dir.push("MeasureHub");
             Some(home_dir)
-        },
+        }
         None => None,
     };
 
@@ -65,7 +64,7 @@ pub async fn run_gui() -> u32 {
 #[derive(Clone, Debug)]
 struct SensorName {
     value: String,
-    next: String
+    next: String,
 }
 
 impl SensorName {
@@ -187,11 +186,18 @@ struct MeasureApp {
 }
 
 impl MeasureApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>, tx: UnboundedSender<PeripheralCmd>, rx: UnboundedReceiver<PeripheralMsg>) -> Self {
+    pub fn new(
+        _cc: &eframe::CreationContext<'_>,
+        tx: UnboundedSender<PeripheralCmd>,
+        rx: UnboundedReceiver<PeripheralMsg>,
+    ) -> Self {
         Self {
             tx,
             rx,
-            state: MeasureAppState {sensors: Vec::<ConnectedSensor>::new(), pending: vec![]},
+            state: MeasureAppState {
+                sensors: Vec::<ConnectedSensor>::new(),
+                pending: vec![],
+            },
         }
     }
 
@@ -291,7 +297,6 @@ impl MeasureApp {
     // @todo: is there another way i could do this? or is this fine?
     fn run(&mut self) -> i8 {
         match self.rx.try_recv() {
-
             // handle Event message
             Ok(PeripheralMsg::Event(val)) => {
                 log::debug!("Received event message");
@@ -312,7 +317,10 @@ impl MeasureApp {
                         log::info!("Async Device Connected: {addr:?}");
                         self.state.sensors.push(ConnectedSensor {
                             addr,
-                            name: SensorName::new(format!("Sensor {:?}", self.state.sensors.len() + 1)),
+                            name: SensorName::new(format!(
+                                "Sensor {:?}",
+                                self.state.sensors.len() + 1
+                            )),
                             value: SensorValue::new(0),
                             subscribed: false,
                             show: false,
@@ -328,7 +336,7 @@ impl MeasureApp {
                         log::info!("Removed from UI: {removed:?}");
                     }
                 };
-            },
+            }
 
             // handle Response message
             Ok(PeripheralMsg::Response(id, val)) => {
@@ -336,7 +344,8 @@ impl MeasureApp {
                 dbg!(&val);
 
                 // check if we have a pending cmd with the same id
-                let mut found = self.state
+                let mut found = self
+                    .state
                     .pending
                     .extract_if(.., |x| x.id == id)
                     .collect::<Vec<_>>();
@@ -346,13 +355,19 @@ impl MeasureApp {
                     log::debug!("Found matching command id in pending list for {val:?}!");
 
                     if cmd.validate_response(&val) {
-                        log::debug!("received matching response type for command: {cmd:?} => {val:?}");
+                        log::debug!(
+                            "received matching response type for command: {cmd:?} => {val:?}"
+                        );
                     } else {
-                        log::warn!("received invalid response type for command: {cmd:?} => {val:?}");
+                        log::warn!(
+                            "received invalid response type for command: {cmd:?} => {val:?}"
+                        );
                         return 1;
                     }
                 } else {
-                    log::warn!("Received unexpected response, no matching command found: {id:?},{val:?}");
+                    log::warn!(
+                        "Received unexpected response, no matching command found: {id:?},{val:?}"
+                    );
                     // issue if there is a pending command that is not resolved due to a wrong response id
                     //  e.g. cannot click connect, b/c the last connect command was never resolved
                     //  @todo add command timeout
@@ -363,9 +378,8 @@ impl MeasureApp {
                 match val {
                     HubResp::Failed => {
                         log::debug!("Command failed");
-                    },
-                    HubResp::Success => {
-                    },
+                    }
+                    HubResp::Success => {}
                     HubResp::ReadData(addr, data) => {
                         log::info!("received read sensor data for {addr:?}");
                         if let Some(p) = self.state.sensors.iter_mut().find(|p| p.addr == addr) {
@@ -393,43 +407,37 @@ impl MeasureApp {
     fn any_pending(&self, action: Option<GuiAction>) -> bool {
         match action {
             None => !self.state.pending.is_empty(),
-            Some(GuiAction::Search) => {
-                self.state.pending.iter().any(|p| {
-                    matches!(p.msg, HubCmd::FindSensors)
-                })
-            },
-            Some(GuiAction::Connect) => {
-                self.state.pending.iter().any(|p| {
-                    matches!(p.msg, HubCmd::ConnectAll | HubCmd::Connect(_))
-                })
-            },
-            Some(GuiAction::Read(addr)) => {
-                self.state.pending.iter().any(|p| {
-                    matches!(p.msg, HubCmd::ReadFrom(a) if a == addr)
-                })
-            },
-            Some(GuiAction::Blink(addr)) => {
-                self.state.pending.iter().any(|p| {
-                    match p.msg {
-                        HubCmd::Blink(a) if a == addr => true,
-                        HubCmd::BlinkAll => true,
-                        _ => false
-                    }
-                })
-            },
-            Some(GuiAction::Subscribe(addr)) => {
-                self.state.pending.iter().any(|p| {
-                    matches!(p.msg, HubCmd::Subscribe(a) if a == addr)
-                })
-            }
+            Some(GuiAction::Search) => self
+                .state
+                .pending
+                .iter()
+                .any(|p| matches!(p.msg, HubCmd::FindSensors)),
+            Some(GuiAction::Connect) => self
+                .state
+                .pending
+                .iter()
+                .any(|p| matches!(p.msg, HubCmd::ConnectAll | HubCmd::Connect(_))),
+            Some(GuiAction::Read(addr)) => self
+                .state
+                .pending
+                .iter()
+                .any(|p| matches!(p.msg, HubCmd::ReadFrom(a) if a == addr)),
+            Some(GuiAction::Blink(addr)) => self.state.pending.iter().any(|p| match p.msg {
+                HubCmd::Blink(a) if a == addr => true,
+                HubCmd::BlinkAll => true,
+                _ => false,
+            }),
+            Some(GuiAction::Subscribe(addr)) => self
+                .state
+                .pending
+                .iter()
+                .any(|p| matches!(p.msg, HubCmd::Subscribe(a) if a == addr)),
         }
     }
 }
 
 impl eframe::App for MeasureApp {
-
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-
         // run message handling
         if self.run() < 0 {
             // show info dialog, then exit
@@ -447,7 +455,6 @@ impl eframe::App for MeasureApp {
         }
 
         egui::SidePanel::left("left panel").show(ctx, |ui| {
-
             // general interface (independent from connected sensors)
             // TODO: use symbols here to make this more compact
             // TODO use this space for testing
@@ -467,7 +474,13 @@ impl eframe::App for MeasureApp {
                     // one button for each connected sensor
                     // TODO: test with more than one; when more than one selected, display next to each other like in a dashboard
                     for s in sensors.iter_mut() {
-                        if ui.toggle_value(&mut s.show, format!("{0} ({1})", s.name.value, s.value.value)).clicked() {
+                        if ui
+                            .toggle_value(
+                                &mut s.show,
+                                format!("{0} ({1})", s.name.value, s.value.value),
+                            )
+                            .clicked()
+                        {
                             // works, the value is toggled automatically
                             log::debug!("sensor {0} clicked", s.name());
                             s.name.reset();
@@ -499,13 +512,21 @@ impl eframe::App for MeasureApp {
             ui.heading("Soil Measurement Sensor Hub");
 
             // enable button only when no search is in progress
-            if ui.add_enabled(!self.any_pending(Some(GuiAction::Search)), egui::Button::new("Find Sensors"))
+            if ui
+                .add_enabled(
+                    !self.any_pending(Some(GuiAction::Search)),
+                    egui::Button::new("Find Sensors"),
+                )
                 .clicked()
             {
                 self.find_sensors();
             }
             // enable button only when no search is in progress
-            if ui.add_enabled(!self.any_pending(Some(GuiAction::Connect)), egui::Button::new("Connect"))
+            if ui
+                .add_enabled(
+                    !self.any_pending(Some(GuiAction::Connect)),
+                    egui::Button::new("Connect"),
+                )
                 .clicked()
             {
                 self.connect_all();
@@ -526,12 +547,20 @@ impl eframe::App for MeasureApp {
                 // idea: have a 'box' per peripheral, with several buttons (read, blink, disconnect)
                 ui.add(egui::Label::new(format!("{0} ({1})", s.name(), s.value())));
                 ui.add(egui::Label::new(format!("{0}", s.addr())));
-                if ui.add_enabled(!self.any_pending(Some(GuiAction::Read(s.addr))), egui::Button::new("Read"))
+                if ui
+                    .add_enabled(
+                        !self.any_pending(Some(GuiAction::Read(s.addr))),
+                        egui::Button::new("Read"),
+                    )
                     .clicked()
                 {
                     self.read_sensor(s.addr);
                 }
-                if ui.add_enabled(!self.any_pending(Some(GuiAction::Blink(s.addr))), egui::Button::new("Blink"))
+                if ui
+                    .add_enabled(
+                        !self.any_pending(Some(GuiAction::Blink(s.addr))),
+                        egui::Button::new("Blink"),
+                    )
                     .clicked()
                 {
                     self.blink(s.addr);

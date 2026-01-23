@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU16, Ordering};
 use btleplug::api::BDAddr;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 /// Hub Resp
 ///
@@ -50,12 +50,10 @@ pub enum HubCmd {
     StopThread,
 }
 
-
 ///////////////////////////////////////////////////////////////
 /// nice would be to have handling of pending messages in here as well, fully encapsulated
 /// does this make sense?
 /// like, keep a vec of pending IDs here and have cmd.handle() check if the id is pending and remove if it is or return err if not?
-
 
 #[derive(Debug, Clone)]
 pub struct PeripheralCmd {
@@ -69,7 +67,7 @@ impl PeripheralCmd {
 
         PeripheralCmd {
             id: CNT.fetch_add(1, Ordering::Relaxed),
-            msg
+            msg,
         }
     }
 
@@ -77,9 +75,9 @@ impl PeripheralCmd {
         // check if HubResp is valid depending on HubCmd
         match (self.msg.clone(), resp) {
             // only ReadFrom may return ReadData or Failed, all others return Success or Failed
-            (HubCmd::ReadFrom(_), HubResp::ReadData(_,_) | HubResp::Failed) => (),
-            (_,HubResp::Success | HubResp::Failed) => (),
-            (_,_) => return false,
+            (HubCmd::ReadFrom(_), HubResp::ReadData(_, _) | HubResp::Failed) => (),
+            (_, HubResp::Success | HubResp::Failed) => (),
+            (_, _) => return false,
         };
         true
     }

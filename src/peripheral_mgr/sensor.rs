@@ -1,12 +1,12 @@
 use crate::peripheral_mgr::error::PeripheralError;
 
-use btleplug::api::{Peripheral as _, WriteType, BDAddr, Characteristic};
+use btleplug::api::{BDAddr, Characteristic, Peripheral as _, WriteType};
 use btleplug::platform::Peripheral;
 use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum PeripheralAction {
-    Write([u8;1]),
+    Write([u8; 1]),
     Read,
     Subscribe,
     Unsubscribe,
@@ -23,7 +23,7 @@ pub enum ActionResult {
 /// Individual Sensor Peripheral device
 /// Represents one Sensor Peripheral
 /// @todo should i remove this abstraction? i feel like this introduces more complexity than is necessary
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct SensorPeripheral {
     pub peripheral: Peripheral,
     pub addr: BDAddr,
@@ -73,15 +73,13 @@ impl SensorPeripheral {
                 log::debug!("Connected to sensor device");
                 log::debug!("Peripheral id: {:?}", self.peripheral.id());
                 Ok(())
-            },
-            Err(_) => {
-                Err(PeripheralError::ConnectionError)
             }
+            Err(_) => Err(PeripheralError::ConnectionError),
         }
     }
 
     pub async fn disconnect(&mut self) -> Result<(), PeripheralError> {
-        if ! match self.peripheral.is_connected().await {
+        if !match self.peripheral.is_connected().await {
             Ok(res) => res,
             Err(e) => {
                 log::debug!("Cannot determine peripheral connection status: {e:?}");
@@ -94,68 +92,71 @@ impl SensorPeripheral {
 
         match self.peripheral.disconnect().await {
             Ok(_) => Ok(()),
-            Err(_) => {
-                Err(PeripheralError::ConnectionError)
-            }
+            Err(_) => Err(PeripheralError::ConnectionError),
         }
     }
 
-    pub async fn do_action(&mut self, uuid: Uuid, action: PeripheralAction) -> Result<ActionResult, PeripheralError> {
+    pub async fn do_action(
+        &mut self,
+        uuid: Uuid,
+        action: PeripheralAction,
+    ) -> Result<ActionResult, PeripheralError> {
         // discover services and characteristics
         let _ = self.peripheral.discover_services().await;
 
-        let ch = match self.peripheral.characteristics().iter().find(|c| c.uuid == uuid) {
+        let ch = match self
+            .peripheral
+            .characteristics()
+            .iter()
+            .find(|c| c.uuid == uuid)
+        {
             None => return Err(PeripheralError::NoCharacteristic),
-            Some(char) => char.clone()
+            Some(char) => char.clone(),
         };
 
         match action {
-            PeripheralAction::Write(data) => {
-                match self.write(ch, data).await {
-                    Ok(_) => Ok(ActionResult::Success),
-                    Err(e) => Err(e)
-                }
+            PeripheralAction::Write(data) => match self.write(ch, data).await {
+                Ok(_) => Ok(ActionResult::Success),
+                Err(e) => Err(e),
             },
-            PeripheralAction::Read => {
-                match self.read(ch).await {
-                    Ok(val) => Ok(ActionResult::Data(val)),
-                    Err(e) => Err(e),
-                }
+            PeripheralAction::Read => match self.read(ch).await {
+                Ok(val) => Ok(ActionResult::Data(val)),
+                Err(e) => Err(e),
             },
-            PeripheralAction::Subscribe => {
-                match self.subscribe(ch).await {
-                    Ok(_) => Ok(ActionResult::Success),
-                    Err(e) => Err(e),
-                }
+            PeripheralAction::Subscribe => match self.subscribe(ch).await {
+                Ok(_) => Ok(ActionResult::Success),
+                Err(e) => Err(e),
             },
-            PeripheralAction::Unsubscribe => {
-                match self.unsubscribe(ch).await {
-                    Ok(_) => Ok(ActionResult::Success),
-                    Err(e) => Err(e),
-                }
-            }
+            PeripheralAction::Unsubscribe => match self.unsubscribe(ch).await {
+                Ok(_) => Ok(ActionResult::Success),
+                Err(e) => Err(e),
+            },
         }
     }
 
     pub async fn read(&self, char: Characteristic) -> Result<u32, PeripheralError> {
         match self.peripheral.read(&char).await {
             Ok(res) => {
-                let d = match <[u8;4]>::try_from(&res[..4]) {
+                let d = match <[u8; 4]>::try_from(&res[..4]) {
                     Ok(arr) => arr,
                     Err(_) => {
                         return Err(PeripheralError::ReadFailed);
                     }
                 };
                 Ok(u32::from_le_bytes(d))
-            },
-            Err(_) => Err(PeripheralError::IOError)
+            }
+            Err(_) => Err(PeripheralError::IOError),
         }
     }
 
-    pub async fn write(&self, char: Characteristic, data: [u8;1]) -> Result<(), PeripheralError> {
-        match self.peripheral.write(&char, &data, WriteType::WithResponse).await {
+    pub async fn write(&self, char: Characteristic, data: [u8; 1]) -> Result<(), PeripheralError> {
+        match self
+            .peripheral
+            .write(&char, &data, WriteType::WithResponse)
+            .await
+        {
             Ok(_) => Ok(()),
-            Err(_) => Err(PeripheralError::IOError)
+            Err(_) => Err(PeripheralError::IOError),
         }
     }
 
@@ -169,7 +170,7 @@ impl SensorPeripheral {
     pub async fn unsubscribe(&self, char: Characteristic) -> Result<(), PeripheralError> {
         match self.peripheral.unsubscribe(&char).await {
             Ok(_) => Ok(()),
-            Err(_) => Err(PeripheralError::IOError)
+            Err(_) => Err(PeripheralError::IOError),
         }
     }
 }
