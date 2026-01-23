@@ -4,6 +4,8 @@ Simple GUI to interact with specific BLE devices.
 
 ## Usage
 
+Note: This only makes sense in combination with the Sensor peripherals.
+
 ## Development
 
 ### logging
@@ -32,6 +34,7 @@ Simple GUI to interact with specific BLE devices.
 - [ ] can i do a running statusbar?
 - [x] let user change sensor name
 - [ ] PERSISTENCE (remember known sensors)
+- [ ] add command timeouts: if a command is not resolved after x amount of time, remove from pending list
 
 ### Peripheral Mgr
 
