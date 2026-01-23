@@ -1,5 +1,5 @@
 use crate::peripheral_mgr::peripheral;
-use crate::peripheral_mgr::peripheral::{EventMsg, HubMsg};
+use crate::peripheral_mgr::message::{HubCmd, HubResp, HubEvent, PeripheralCmd, PeripheralMsg};
 use btleplug::api::BDAddr;
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 use eframe::egui::global_theme_preference_switch;
@@ -171,77 +171,113 @@ enum UiAction {
 struct MeasureAppState {
     sensors: Vec<ConnectedSensor>,
     action: UiAction,
+    pending: Vec<PeripheralCmd>,
 }
 
 /// Measurement GUI
 struct MeasureApp {
-    rx: Receiver<EventMsg>,
-    tx: Sender<HubMsg>,
+    rx: Receiver<PeripheralMsg>,
+    tx: Sender<PeripheralCmd>,
 
     state: MeasureAppState,
 }
 
 impl MeasureApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>, tx: Sender<HubMsg>, rx: Receiver<EventMsg>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>, tx: Sender<PeripheralCmd>, rx: Receiver<PeripheralMsg>) -> Self {
         Self {
             tx,
             rx,
-            state: MeasureAppState {sensors: Vec::<ConnectedSensor>::new(), action: UiAction::NoAction},
+            state: MeasureAppState {sensors: Vec::<ConnectedSensor>::new(), action: UiAction::NoAction, pending: vec![]},
         }
     }
 
     fn find_sensors(&mut self) {
         log::info!("looking for sensors");
+
+        let cmd = PeripheralCmd::new(HubCmd::FindSensors);
+        self.state.pending.push(cmd.clone());
         self.state.action = UiAction::Searching;
-        self.tx.send(HubMsg::FindSensors).unwrap();
+        self.tx.send(cmd).unwrap();
     }
 
-    fn ping(&self) {
+    fn ping(&mut self) {
         log::debug!("GUI managing sensors:");
         dbg!(&self.state.sensors);
+        log::debug!("GUI pending commands:");
+        dbg!(&self.state.pending);
+
         log::info!("pinging manager");
-        self.tx.send(HubMsg::Ping).unwrap();
+
+        let cmd = PeripheralCmd::new(HubCmd::Ping);
+        self.state.pending.push(cmd.clone());
+        self.tx.send(cmd).unwrap();
     }
 
-    fn blink(&self, addr: BDAddr) {
+    fn blink(&mut self, addr: BDAddr) {
         log::info!("blinking led");
-        self.tx.send(HubMsg::Blink(addr)).unwrap();
+
+        let cmd = PeripheralCmd::new(HubCmd::Blink(addr));
+        self.state.pending.push(cmd.clone());
+        self.tx.send(cmd).unwrap();
     }
 
-    fn blink_all(&self) {
+    fn connect(&mut self, addr: BDAddr) {
+        log::info!("connecting to sensor");
+
+        let cmd = PeripheralCmd::new(HubCmd::Connect(addr));
+        self.state.pending.push(cmd.clone());
+        self.state.action = UiAction::Connecting(addr);
+        self.tx.send(cmd).unwrap();
+    }
+
+    fn blink_all(&mut self) {
         log::info!("blinking led");
-        self.tx.send(HubMsg::BlinkAll).unwrap();
+        let cmd = PeripheralCmd::new(HubCmd::BlinkAll);
+        self.state.pending.push(cmd.clone());
+        self.tx.send(cmd).unwrap();
     }
 
-    fn read_sensor(&self, addr: BDAddr) {
+    fn read_sensor(&mut self, addr: BDAddr) {
         log::info!("reading from sensor");
-        self.tx.send(HubMsg::ReadFrom(addr)).unwrap();
+        let cmd = PeripheralCmd::new(HubCmd::ReadFrom(addr));
+        self.state.pending.push(cmd.clone());
+        self.tx.send(cmd).unwrap();
     }
 
-    fn subscribe(&self, addr: BDAddr) {
+    fn subscribe(&mut self, addr: BDAddr) {
         log::info!("subscribing to data from sensor");
-        self.tx.send(HubMsg::Subscribe(addr)).unwrap();
+        let cmd = PeripheralCmd::new(HubCmd::Subscribe(addr));
+        self.state.pending.push(cmd.clone());
+        self.tx.send(cmd).unwrap();
     }
 
-    fn unsubscribe(&self, addr: BDAddr) {
+    fn unsubscribe(&mut self, addr: BDAddr) {
         log::info!("unsubscribing to data from sensor");
-        self.tx.send(HubMsg::Unsubscribe(addr)).unwrap();
+        let cmd = PeripheralCmd::new(HubCmd::Unsubscribe(addr));
+        self.state.pending.push(cmd.clone());
+        self.tx.send(cmd).unwrap();
     }
 
-    fn disconnect_all(&self) {
+    fn disconnect_all(&mut self) {
         for p in self.state.sensors.iter() {
-            self.tx.send(HubMsg::Disconnect(p.addr)).unwrap();
+            let cmd = PeripheralCmd::new(HubCmd::Disconnect(p.addr));
+            self.state.pending.push(cmd.clone());
+            self.tx.send(cmd).unwrap();
         }
     }
 
-    fn connect_all(&self) {
-        self.tx.send(HubMsg::ConnectAll).unwrap();
+    fn connect_all(&mut self) {
+        let cmd = PeripheralCmd::new(HubCmd::ConnectAll);
+        self.state.pending.push(cmd.clone());
+        self.tx.send(cmd).unwrap();
     }
 
     fn cleanup_and_exit(&mut self, ctx: egui::Context) {
         // tell PeripheralMgr to stop
         // handle is awaited in the runner
-        self.tx.send(HubMsg::StopThread).unwrap();
+        let cmd = PeripheralCmd::new(HubCmd::StopThread);
+        self.state.pending.push(cmd.clone());
+        self.tx.send(cmd).unwrap();
 
         // works (https://github.com/emilk/egui/discussions/4103#discussioncomment-9225022)
         std::thread::spawn(move || {
@@ -253,26 +289,25 @@ impl MeasureApp {
     // @todo: is there another way i could do this? or is this fine?
     fn run(&mut self) -> i8 {
         match self.rx.try_recv() {
-            Ok(val) => {
+
+            // handle Event message
+            Ok(PeripheralMsg::Event(val)) => {
                 dbg!(&val);
+
+                log::debug!("received event message");
                 match val {
-                    EventMsg::DeviceDiscovered(addr) => {
+                    HubEvent::DeviceDiscovered(addr) => {
                         log::info!("Device Discovered: {addr:?}");
-                        self.tx.send(HubMsg::Connect(addr)).unwrap();
-                        self.state.action = UiAction::Connecting(addr);
+                        self.connect(addr);
                     }
-                    EventMsg::SearchFailed => {
-                        log::info!("Failed to find any sensors");
-                        self.state.action = UiAction::NoAction;
-                    }
-                    EventMsg::NewData(addr, data) => {
-                        log::info!("received new sensor data for {addr:?}");
+                    HubEvent::NewData(addr, data) => {
+                        log::info!("Async received new sensor data for {addr:?}");
                         if let Some(p) = self.state.sensors.iter_mut().find(|p| p.addr == addr) {
                             p.value.update(data);
                         }
                     }
-                    EventMsg::DeviceConnected(addr) => {
-                        log::info!("Device Connected: {addr:?}");
+                    HubEvent::DeviceConnected(addr) => {
+                        log::info!("Async Device Connected: {addr:?}");
                         self.state.sensors.push(ConnectedSensor {
                             addr,
                             name: SensorName::new(format!("Sensor {:?}", self.state.sensors.len() + 1)),
@@ -282,8 +317,8 @@ impl MeasureApp {
                         });
                         self.state.action = UiAction::NoAction;
                     }
-                    EventMsg::DeviceDisconnected(addr) => {
-                        log::info!("Device Disconnected: {addr:?}");
+                    HubEvent::DeviceDisconnected(addr) => {
+                        log::info!("Async Device Disconnected: {addr:?}");
                         let removed = self
                             .state
                             .sensors
@@ -291,11 +326,56 @@ impl MeasureApp {
                             .collect::<Vec<_>>();
                         log::info!("Removed from UI: {removed:?}");
                     }
-                    EventMsg::ServiceDiscovered(addr) => {
-                        log::info!("Found Moisture LED service: {addr:?}")
-                    } // not really needed; and sensor currently does not advrertise this
+                };
+            },
+
+            // handle Response message
+            Ok(PeripheralMsg::Response(id, val)) => {
+                dbg!(&val);
+
+                // check if we have a pending cmd with the same id
+                let mut found = self.state
+                    .pending
+                    .extract_if(.., |x| x.id == id)
+                    .collect::<Vec<_>>();
+
+                if let Some(cmd) = found.pop() {
+                    // at least for now, let's ignore the possibility of multiple cmds found
+                    log::debug!("Found matching command id in pending list for {val:?}!");
+
+                    if cmd.validate_response(&val) {
+                        log::debug!("received matching response type for command: {cmd:?} => {val:?}");
+                    } else {
+                        log::warn!("received invalid response type for command: {cmd:?} => {val:?}");
+                        return 1;
+                    }
+                } else {
+                    log::warn!("Received unexpected response, no matching command found: {id:?},{val:?}");
+                    // issue if there is a pending command that is not resolved due to a wrong response id
+                    //  e.g. cannot click connect, b/c the last connect command was never resolved
+                    //  @todo add command timeout
+                    return 1;
+                }
+
+                // handle the response
+                match val {
+                    HubResp::Failed => {
+                        log::debug!("Command failed");
+                        self.state.action = UiAction::NoAction;
+                    },
+                    HubResp::Success => {
+                        self.state.action = UiAction::NoAction;
+                    },
+                    HubResp::ReadData(addr, data) => {
+                        log::info!("received read sensor data for {addr:?}");
+                        if let Some(p) = self.state.sensors.iter_mut().find(|p| p.addr == addr) {
+                            p.value.update(data);
+                        }
+                    }
                 };
             }
+
+            // handle (or ignore) errors
             Err(TryRecvError::Empty) => (),
             Err(TryRecvError::Disconnected) => {
                 log::warn!("disconnected from thread!");
