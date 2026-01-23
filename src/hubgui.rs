@@ -242,6 +242,12 @@ impl eframe::App for MeasureApp {
             {
                 self.find_sensors();
             }
+            // enable button only when no search is in progress
+            if ui.add_enabled(self.state.action == UiAction::NoAction, egui::Button::new("Connect"))
+                .clicked()
+            {
+                self.connect_all();
+            }
 
             // show spinner while action in progress
             if self.state.action != UiAction::NoAction {
