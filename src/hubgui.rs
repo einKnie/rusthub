@@ -1,4 +1,6 @@
-use crate::peripheral_mgr::message::{HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg};
+use crate::peripheral_mgr::message::{
+    CmdMgr, HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg,
+};
 use crate::peripheral_mgr::peripheral;
 use btleplug::api::BDAddr;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -174,7 +176,7 @@ enum GuiAction {
 #[derive(Clone, Debug)]
 struct MeasureAppState {
     sensors: Vec<ConnectedSensor>,
-    pending: Vec<PeripheralCmd>,
+    pending: CmdMgr,
 }
 
 /// Measurement GUI
@@ -191,12 +193,15 @@ impl MeasureApp {
         tx: UnboundedSender<PeripheralCmd>,
         rx: UnboundedReceiver<PeripheralMsg>,
     ) -> Self {
+        let pending = CmdMgr::default();
+        pending.start_handler();
+
         Self {
             tx,
             rx,
             state: MeasureAppState {
                 sensors: Vec::<ConnectedSensor>::new(),
-                pending: vec![],
+                pending,
             },
         }
     }
@@ -204,8 +209,10 @@ impl MeasureApp {
     fn find_sensors(&mut self) {
         log::info!("looking for sensors");
 
-        let cmd = PeripheralCmd::new(HubCmd::FindSensors);
-        self.state.pending.push(cmd.clone());
+        let cmd = self
+            .state
+            .pending
+            .add(PeripheralCmd::new(HubCmd::FindSensors));
         self.tx.send(cmd).unwrap();
     }
 
@@ -217,74 +224,88 @@ impl MeasureApp {
 
         log::info!("pinging manager");
 
-        let cmd = PeripheralCmd::new(HubCmd::Ping);
-        self.state.pending.push(cmd.clone());
+        let cmd = self.state.pending.add(PeripheralCmd::new(HubCmd::Ping));
         self.tx.send(cmd).unwrap();
     }
 
     fn blink(&mut self, addr: BDAddr) {
         log::info!("blinking led");
 
-        let cmd = PeripheralCmd::new(HubCmd::Blink(addr));
-        self.state.pending.push(cmd.clone());
+        let cmd = self
+            .state
+            .pending
+            .add(PeripheralCmd::new(HubCmd::Blink(addr)));
         self.tx.send(cmd).unwrap();
     }
 
     fn connect(&mut self, addr: BDAddr) {
         log::info!("connecting to sensor");
 
-        let cmd = PeripheralCmd::new(HubCmd::Connect(addr));
-        self.state.pending.push(cmd.clone());
+        let cmd = self
+            .state
+            .pending
+            .add(PeripheralCmd::new(HubCmd::Connect(addr)));
         self.tx.send(cmd).unwrap();
     }
 
     fn blink_all(&mut self) {
         log::info!("blinking led");
-        let cmd = PeripheralCmd::new(HubCmd::BlinkAll);
-        self.state.pending.push(cmd.clone());
+        let cmd = self.state.pending.add(PeripheralCmd::new(HubCmd::BlinkAll));
         self.tx.send(cmd).unwrap();
     }
 
     fn read_sensor(&mut self, addr: BDAddr) {
         log::info!("reading from sensor");
-        let cmd = PeripheralCmd::new(HubCmd::ReadFrom(addr));
-        self.state.pending.push(cmd.clone());
+        let cmd = self
+            .state
+            .pending
+            .add(PeripheralCmd::new(HubCmd::ReadFrom(addr)));
         self.tx.send(cmd).unwrap();
     }
 
     fn subscribe(&mut self, addr: BDAddr) {
         log::info!("subscribing to data from sensor");
-        let cmd = PeripheralCmd::new(HubCmd::Subscribe(addr));
-        self.state.pending.push(cmd.clone());
+        let cmd = self
+            .state
+            .pending
+            .add(PeripheralCmd::new(HubCmd::Subscribe(addr)));
         self.tx.send(cmd).unwrap();
     }
 
     fn unsubscribe(&mut self, addr: BDAddr) {
         log::info!("unsubscribing to data from sensor");
-        let cmd = PeripheralCmd::new(HubCmd::Unsubscribe(addr));
-        self.state.pending.push(cmd.clone());
+        let cmd = self
+            .state
+            .pending
+            .add(PeripheralCmd::new(HubCmd::Unsubscribe(addr)));
         self.tx.send(cmd).unwrap();
     }
 
     fn disconnect_all(&mut self) {
         for p in self.state.sensors.iter() {
-            let cmd = PeripheralCmd::new(HubCmd::Disconnect(p.addr));
-            self.state.pending.push(cmd.clone());
+            let cmd = self
+                .state
+                .pending
+                .add(PeripheralCmd::new(HubCmd::Disconnect(p.addr)));
             self.tx.send(cmd).unwrap();
         }
     }
 
     fn connect_all(&mut self) {
-        let cmd = PeripheralCmd::new(HubCmd::ConnectAll);
-        self.state.pending.push(cmd.clone());
+        let cmd = self
+            .state
+            .pending
+            .add(PeripheralCmd::new(HubCmd::ConnectAll));
         self.tx.send(cmd).unwrap();
     }
 
     fn cleanup_and_exit(&mut self, ctx: egui::Context) {
         // tell PeripheralMgr to stop
         // handle is awaited in the runner
-        let cmd = PeripheralCmd::new(HubCmd::StopThread);
-        self.state.pending.push(cmd.clone());
+        let cmd = self
+            .state
+            .pending
+            .add(PeripheralCmd::new(HubCmd::StopThread));
         self.tx.send(cmd).unwrap();
 
         // works (https://github.com/emilk/egui/discussions/4103#discussioncomment-9225022)
@@ -343,14 +364,7 @@ impl MeasureApp {
                 log::debug!("Received response message");
                 dbg!(&val);
 
-                // check if we have a pending cmd with the same id
-                let mut found = self
-                    .state
-                    .pending
-                    .extract_if(.., |x| x.id == id)
-                    .collect::<Vec<_>>();
-
-                if let Some(cmd) = found.pop() {
+                if let Some(cmd) = self.state.pending.pop(id) {
                     // at least for now, let's ignore the possibility of multiple cmds found
                     log::debug!("Found matching command id in pending list for {val:?}!");
 
@@ -407,31 +421,33 @@ impl MeasureApp {
     fn any_pending(&self, action: Option<GuiAction>) -> bool {
         match action {
             None => !self.state.pending.is_empty(),
-            Some(GuiAction::Search) => self
-                .state
-                .pending
-                .iter()
-                .any(|p| matches!(p.msg, HubCmd::FindSensors)),
-            Some(GuiAction::Connect) => self
-                .state
-                .pending
-                .iter()
-                .any(|p| matches!(p.msg, HubCmd::ConnectAll | HubCmd::Connect(_))),
-            Some(GuiAction::Read(addr)) => self
-                .state
-                .pending
-                .iter()
-                .any(|p| matches!(p.msg, HubCmd::ReadFrom(a) if a == addr)),
-            Some(GuiAction::Blink(addr)) => self.state.pending.iter().any(|p| match p.msg {
-                HubCmd::Blink(a) if a == addr => true,
-                HubCmd::BlinkAll => true,
-                _ => false,
-            }),
-            Some(GuiAction::Subscribe(addr)) => self
-                .state
-                .pending
-                .iter()
-                .any(|p| matches!(p.msg, HubCmd::Subscribe(a) if a == addr)),
+            Some(kind) => {
+                let pending: Vec<_> = self
+                    .state
+                    .pending
+                    .get_current()
+                    .iter()
+                    .map(|cmd| cmd.msg)
+                    .collect();
+
+                match kind {
+                    GuiAction::Search => pending.iter().any(|c| matches!(c, HubCmd::FindSensors)),
+                    GuiAction::Connect => pending
+                        .iter()
+                        .any(|c| matches!(c, HubCmd::ConnectAll | HubCmd::Connect(_))),
+                    GuiAction::Read(addr) => pending
+                        .iter()
+                        .any(|c| matches!(c, HubCmd::ReadFrom(a) if *a == addr)),
+                    GuiAction::Blink(addr) => pending.iter().any(|c| match c {
+                        HubCmd::Blink(a) if *a == addr => true,
+                        HubCmd::BlinkAll => true,
+                        _ => false,
+                    }),
+                    GuiAction::Subscribe(addr) => pending
+                        .iter()
+                        .any(|c| matches!(c, HubCmd::Subscribe(a) if *a == addr)),
+                }
+            }
         }
     }
 }
