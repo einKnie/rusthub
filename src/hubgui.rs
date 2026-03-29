@@ -168,8 +168,6 @@ enum DatabaseAction {
 #[derive(Clone, Debug)]
 struct MeasureAppState {
     sensors: Vec<ConnectedSensor>,
-    pending_peripheral: CmdMgr<PeripheralCmd>,
-    pending_database: CmdMgr<DatabaseCmd>,
 }
 
 /// Mgr connection
@@ -177,6 +175,7 @@ struct MeasureAppState {
 struct MgrConnection<T, U> {
     tx: UnboundedSender<T>,
     rx: UnboundedReceiver<U>,
+    pending: CmdMgr<T>,
 }
 
 /// Measurement GUI
@@ -209,15 +208,15 @@ impl MeasureApp {
             peripheral: MgrConnection {
                 tx: periph_channels.0,
                 rx: periph_channels.1,
+                pending: pending_p,
             },
             database: MgrConnection {
                 tx: db_channels.0,
                 rx: db_channels.1,
+                pending: pending_db,
             },
             state: MeasureAppState {
                 sensors: Vec::<ConnectedSensor>::new(),
-                pending_peripheral: pending_p,
-                pending_database: pending_db,
             },
         }
     }
@@ -226,7 +225,7 @@ impl MeasureApp {
     ///
     /// This also adds the command to the pending database actions
     fn send_database_command(&mut self, cmd: DBCmd) {
-        let cmd = self.state.pending_database.add(DatabaseCmd::new(cmd));
+        let cmd = self.database.pending.add(DatabaseCmd::new(cmd));
         self.database.tx.send(cmd).unwrap();
     }
 
@@ -234,7 +233,7 @@ impl MeasureApp {
     ///
     /// This also adds the command to the pending peripheral actions
     fn send_peripheral_command(&mut self, cmd: HubCmd) {
-        let cmd = self.state.pending_peripheral.add(PeripheralCmd::new(cmd));
+        let cmd = self.peripheral.pending.add(PeripheralCmd::new(cmd));
         self.peripheral.tx.send(cmd).unwrap();
     }
 
@@ -247,7 +246,7 @@ impl MeasureApp {
         log::debug!("GUI managing sensors:");
         dbg!(&self.state.sensors);
         log::debug!("GUI pending commands:");
-        dbg!(&self.state.pending_peripheral);
+        dbg!(&self.peripheral.pending);
 
         log::info!("pinging manager");
         self.send_peripheral_command(HubCmd::Ping);
@@ -374,7 +373,7 @@ impl MeasureApp {
                 log::debug!("Received response message");
                 dbg!(&val);
 
-                if let Some(cmd) = self.state.pending_peripheral.pop(id) {
+                if let Some(cmd) = self.peripheral.pending.pop(id) {
                     // at least for now, let's ignore the possibility of multiple cmds found
                     log::debug!("Found matching command id in pending list for {val:?}!");
 
@@ -429,7 +428,7 @@ impl MeasureApp {
             // handle Event message
             Ok(DatabaseResp::Response(id, val)) => {
                 log::debug!("Received database response message");
-                if let Some(cmd) = self.state.pending_database.pop(id) {
+                if let Some(cmd) = self.database.pending.pop(id) {
                     // at least for now, let's ignore the possibility of multiple cmds found
                     log::debug!("Found matching command id in pending list for {val:?}!");
 
@@ -506,8 +505,8 @@ impl MeasureApp {
             UiAction::Peripheral(act) => {
                 let kind = act;
                 let pending: Vec<_> = self
-                    .state
-                    .pending_peripheral
+                    .peripheral
+                    .pending
                     .get_current()
                     .iter()
                     .map(|cmd| cmd.msg)
@@ -537,8 +536,8 @@ impl MeasureApp {
             UiAction::Database(act) => {
                 let kind = act;
                 let pending: Vec<_> = self
-                    .state
-                    .pending_database
+                    .database
+                    .pending
                     .get_current()
                     .iter()
                     .map(|cmd| cmd.msg.clone())
