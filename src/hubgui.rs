@@ -155,11 +155,16 @@ struct MeasureAppState {
     pending_peripheral: CmdMgr<PeripheralCmd>,
 }
 
+/// Mgr connection
+/// Generic to hold sender and receiver for a mgr connection
+struct MgrConnection<T, U> {
+    tx: UnboundedSender<T>,
+    rx: UnboundedReceiver<U>,
+}
+
 /// Measurement GUI
 struct MeasureApp {
-    tx: UnboundedSender<PeripheralCmd>,
-    rx: UnboundedReceiver<PeripheralMsg>,
-
+    peripheral: MgrConnection<PeripheralCmd, PeripheralMsg>,
     state: MeasureAppState,
 }
 
@@ -175,8 +180,10 @@ impl MeasureApp {
         pending_p.start_handler();
 
         Self {
-            tx: periph_channels.0,
-            rx: periph_channels.1,
+            peripheral: MgrConnection {
+                tx: periph_channels.0,
+                rx: periph_channels.1,
+            },
             state: MeasureAppState {
                 sensors: Vec::<ConnectedSensor>::new(),
                 pending_peripheral: pending_p,
@@ -184,9 +191,12 @@ impl MeasureApp {
         }
     }
 
+    /// Send Command to the Peripheral manager
+    ///
+    /// This also adds the command to the pending peripheral actions
     fn send_peripheral_command(&mut self, cmd: HubCmd) {
         let cmd = self.state.pending_peripheral.add(PeripheralCmd::new(cmd));
-        self.tx.send(cmd).unwrap();
+        self.peripheral.tx.send(cmd).unwrap();
     }
 
     fn find_sensors(&mut self) {
@@ -258,7 +268,7 @@ impl MeasureApp {
     // non-blocking to be run inside frame update
     // @todo: is there another way i could do this? or is this fine?
     fn run(&mut self) -> i8 {
-        match self.rx.try_recv() {
+        match self.peripheral.rx.try_recv() {
             // handle Event message
             Ok(PeripheralMsg::Event(val)) => {
                 log::debug!("Received event message");
