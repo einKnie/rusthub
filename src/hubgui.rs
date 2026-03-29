@@ -90,41 +90,6 @@ impl SensorName {
     }
 }
 
-/// SensorValue
-///
-/// Helper class to allow seamless records on value range.
-/// Could be updated to retain more info in the furture, e.g. for charts (though info should be kept on disk not in memory)
-#[derive(Clone, Debug)]
-struct SensorValue {
-    value: u32,
-
-    min: u32,
-    max: u32,
-}
-
-impl SensorValue {
-    fn new(val: u32) -> Self {
-        Self {
-            value: val,
-            min: u32::MAX,
-            max: 0,
-        }
-    }
-
-    /// Update value to next-value
-    /// and update min and max if necessary
-    fn update(&mut self, next: u32) {
-        if next < self.min {
-            self.min = next;
-        }
-        if next > self.max {
-            self.max = next;
-        }
-
-        self.value = next;
-    }
-}
-
 /// Connected Sensor
 ///
 /// Represents one connected sensor with device address and name
@@ -132,7 +97,7 @@ impl SensorValue {
 struct ConnectedSensor {
     addr: BDAddr,
     name: SensorName,
-    value: SensorValue,
+    last: u32,
     subscribed: bool,
     show: bool,
 }
@@ -151,7 +116,7 @@ impl ConnectedSensor {
 
     /// Get current sensor value
     pub fn value(&self) -> u32 {
-        self.value.value
+        self.last
     }
 
     /// Get the sensor's address
@@ -298,18 +263,18 @@ impl MeasureApp {
                     HubEvent::NewData(addr, data) => {
                         log::info!("Async received new sensor data for {addr:?}");
                         if let Some(p) = self.state.sensors.iter_mut().find(|p| p.addr == addr) {
-                            p.value.update(data);
+                            p.last = data;
                         }
                     }
                     HubEvent::DeviceConnected(addr) => {
                         log::info!("Async Device Connected: {addr:?}");
+                        let sensorname =
+                            SensorName::new(format!("Sensor {:?}", self.state.sensors.len() + 1));
+
                         self.state.sensors.push(ConnectedSensor {
                             addr,
-                            name: SensorName::new(format!(
-                                "Sensor {:?}",
-                                self.state.sensors.len() + 1
-                            )),
-                            value: SensorValue::new(0),
+                            name: sensorname.clone(),
+                            last: 0,
                             subscribed: false,
                             show: false,
                         });
@@ -364,7 +329,7 @@ impl MeasureApp {
                     HubResp::ReadData(addr, data) => {
                         log::info!("received read sensor data for {addr:?}");
                         if let Some(p) = self.state.sensors.iter_mut().find(|p| p.addr == addr) {
-                            p.value.update(data);
+                            p.last = data;
                         }
                     }
                 };
@@ -458,10 +423,7 @@ impl eframe::App for MeasureApp {
                     // TODO: test with more than one; when more than one selected, display next to each other like in a dashboard
                     for s in sensors.iter_mut() {
                         if ui
-                            .toggle_value(
-                                &mut s.show,
-                                format!("{0} ({1})", s.name.value, s.value.value),
-                            )
+                            .toggle_value(&mut s.show, format!("{0} ({1})", s.name.value, s.last))
                             .clicked()
                         {
                             // works, the value is toggled automatically
