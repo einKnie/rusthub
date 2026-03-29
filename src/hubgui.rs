@@ -178,7 +178,7 @@ enum GuiAction {
 #[derive(Clone, Debug)]
 struct MeasureAppState {
     sensors: Vec<ConnectedSensor>,
-    pending: CmdMgr<PeripheralCmd>,
+    pending_peripheral: CmdMgr<PeripheralCmd>,
 }
 
 /// Measurement GUI
@@ -197,120 +197,83 @@ impl MeasureApp {
             UnboundedReceiver<PeripheralMsg>,
         ),
     ) -> Self {
-        let pending = CmdMgr::default();
-        pending.start_handler();
+        let pending_p = CmdMgr::default();
+        pending_p.start_handler();
 
         Self {
             tx: periph_channels.0,
             rx: periph_channels.1,
             state: MeasureAppState {
                 sensors: Vec::<ConnectedSensor>::new(),
-                pending,
+                pending_peripheral: pending_p,
             },
         }
     }
 
+    fn send_peripheral_command(&mut self, cmd: HubCmd) {
+        let cmd = self.state.pending_peripheral.add(PeripheralCmd::new(cmd));
+        self.tx.send(cmd).unwrap();
+    }
+
     fn find_sensors(&mut self) {
         log::info!("looking for sensors");
-
-        let cmd = self
-            .state
-            .pending
-            .add(PeripheralCmd::new(HubCmd::FindSensors));
-        self.tx.send(cmd).unwrap();
+        self.send_peripheral_command(HubCmd::FindSensors);
     }
 
     fn ping(&mut self) {
         log::debug!("GUI managing sensors:");
         dbg!(&self.state.sensors);
         log::debug!("GUI pending commands:");
-        dbg!(&self.state.pending);
+        dbg!(&self.state.pending_peripheral);
 
         log::info!("pinging manager");
-
-        let cmd = self.state.pending.add(PeripheralCmd::new(HubCmd::Ping));
-        self.tx.send(cmd).unwrap();
+        self.send_peripheral_command(HubCmd::Ping);
     }
 
     fn blink(&mut self, addr: BDAddr) {
         log::info!("blinking led");
-
-        let cmd = self
-            .state
-            .pending
-            .add(PeripheralCmd::new(HubCmd::Blink(addr)));
-        self.tx.send(cmd).unwrap();
+        self.send_peripheral_command(HubCmd::Blink(addr));
     }
 
     fn connect(&mut self, addr: BDAddr) {
         log::info!("connecting to sensor");
-
-        let cmd = self
-            .state
-            .pending
-            .add(PeripheralCmd::new(HubCmd::Connect(addr)));
-        self.tx.send(cmd).unwrap();
+        self.send_peripheral_command(HubCmd::Connect(addr));
     }
 
     fn blink_all(&mut self) {
         log::info!("blinking led");
-        let cmd = self.state.pending.add(PeripheralCmd::new(HubCmd::BlinkAll));
-        self.tx.send(cmd).unwrap();
+        self.send_peripheral_command(HubCmd::BlinkAll);
     }
 
     fn read_sensor(&mut self, addr: BDAddr) {
         log::info!("reading from sensor");
-        let cmd = self
-            .state
-            .pending
-            .add(PeripheralCmd::new(HubCmd::ReadFrom(addr)));
-        self.tx.send(cmd).unwrap();
+        self.send_peripheral_command(HubCmd::ReadFrom(addr));
     }
 
     fn subscribe(&mut self, addr: BDAddr) {
         log::info!("subscribing to data from sensor");
-        let cmd = self
-            .state
-            .pending
-            .add(PeripheralCmd::new(HubCmd::Subscribe(addr)));
-        self.tx.send(cmd).unwrap();
+        self.send_peripheral_command(HubCmd::Subscribe(addr));
     }
 
     fn unsubscribe(&mut self, addr: BDAddr) {
         log::info!("unsubscribing to data from sensor");
-        let cmd = self
-            .state
-            .pending
-            .add(PeripheralCmd::new(HubCmd::Unsubscribe(addr)));
-        self.tx.send(cmd).unwrap();
+        self.send_peripheral_command(HubCmd::Unsubscribe(addr));
     }
 
     fn disconnect_all(&mut self) {
-        for p in self.state.sensors.iter() {
-            let cmd = self
-                .state
-                .pending
-                .add(PeripheralCmd::new(HubCmd::Disconnect(p.addr)));
-            self.tx.send(cmd).unwrap();
+        let sensors = self.state.sensors.clone();
+        for p in sensors.iter() {
+            self.send_peripheral_command(HubCmd::Disconnect(p.addr));
         }
     }
 
     fn connect_all(&mut self) {
-        let cmd = self
-            .state
-            .pending
-            .add(PeripheralCmd::new(HubCmd::ConnectAll));
-        self.tx.send(cmd).unwrap();
+        self.send_peripheral_command(HubCmd::ConnectAll);
     }
 
     fn cleanup_and_exit(&mut self, ctx: egui::Context) {
         // tell PeripheralMgr to stop
-        // handle is awaited in the runner
-        let cmd = self
-            .state
-            .pending
-            .add(PeripheralCmd::new(HubCmd::StopThread));
-        self.tx.send(cmd).unwrap();
+        self.send_peripheral_command(HubCmd::StopThread);
 
         // works (https://github.com/emilk/egui/discussions/4103#discussioncomment-9225022)
         std::thread::spawn(move || {
@@ -368,7 +331,7 @@ impl MeasureApp {
                 log::debug!("Received response message");
                 dbg!(&val);
 
-                if let Some(cmd) = self.state.pending.pop(id) {
+                if let Some(cmd) = self.state.pending_peripheral.pop(id) {
                     // at least for now, let's ignore the possibility of multiple cmds found
                     log::debug!("Found matching command id in pending list for {val:?}!");
 
@@ -424,11 +387,11 @@ impl MeasureApp {
     /// if Some, only pending commands falling in the command category return true
     fn any_pending(&self, action: Option<GuiAction>) -> bool {
         match action {
-            None => !self.state.pending.is_empty(),
+            None => !self.state.pending_peripheral.is_empty(),
             Some(kind) => {
                 let pending: Vec<_> = self
                     .state
-                    .pending
+                    .pending_peripheral
                     .get_current()
                     .iter()
                     .map(|cmd| cmd.msg)
