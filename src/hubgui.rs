@@ -23,21 +23,9 @@ pub async fn run_gui() -> u32 {
     let (thread_db_tx, db_rx) = unbounded_channel();
     let db_handle = tokio::spawn(database::mgr_run(thread_db_tx, thread_db_rx));
 
-    // determine path for storage
-    let storage_path = match std::env::home_dir() {
-        Some(mut home_dir) => {
-            home_dir.push("MeasureHub");
-            Some(home_dir)
-        }
-        None => None,
-    };
-
-    dbg!(&storage_path);
-
     // eframe options
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([320.0, 240.0]),
-        persistence_path: storage_path,
         ..Default::default()
     };
     if eframe::run_native(
@@ -404,9 +392,6 @@ impl MeasureApp {
                     log::warn!(
                         "Received unexpected response, no matching command found: {id:?},{val:?}"
                     );
-                    // issue if there is a pending command that is not resolved due to a wrong response id
-                    //  e.g. cannot click connect, b/c the last connect command was never resolved
-                    //  @todo add command timeout
                     return 1;
                 }
 
