@@ -1,6 +1,5 @@
-use crate::peripheral_mgr::message::{
-    CmdMgr, HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg,
-};
+use crate::cmdmgr::CmdMgr;
+use crate::peripheral_mgr::message::{HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg};
 use crate::peripheral_mgr::peripheral;
 use btleplug::api::BDAddr;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -41,7 +40,10 @@ pub async fn run_gui() -> u32 {
             // This gives us image support:
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            Ok(Box::<MeasureApp>::new(MeasureApp::new(cc, gui_tx, gui_rx)))
+            Ok(Box::<MeasureApp>::new(MeasureApp::new(
+                cc,
+                (gui_tx, gui_rx),
+            )))
         }),
     )
     .is_err()
@@ -176,13 +178,13 @@ enum GuiAction {
 #[derive(Clone, Debug)]
 struct MeasureAppState {
     sensors: Vec<ConnectedSensor>,
-    pending: CmdMgr,
+    pending: CmdMgr<PeripheralCmd>,
 }
 
 /// Measurement GUI
 struct MeasureApp {
-    rx: UnboundedReceiver<PeripheralMsg>,
     tx: UnboundedSender<PeripheralCmd>,
+    rx: UnboundedReceiver<PeripheralMsg>,
 
     state: MeasureAppState,
 }
@@ -190,15 +192,17 @@ struct MeasureApp {
 impl MeasureApp {
     pub fn new(
         _cc: &eframe::CreationContext<'_>,
-        tx: UnboundedSender<PeripheralCmd>,
-        rx: UnboundedReceiver<PeripheralMsg>,
+        periph_channels: (
+            UnboundedSender<PeripheralCmd>,
+            UnboundedReceiver<PeripheralMsg>,
+        ),
     ) -> Self {
         let pending = CmdMgr::default();
         pending.start_handler();
 
         Self {
-            tx,
-            rx,
+            tx: periph_channels.0,
+            rx: periph_channels.1,
             state: MeasureAppState {
                 sensors: Vec::<ConnectedSensor>::new(),
                 pending,
@@ -412,7 +416,7 @@ impl MeasureApp {
         0
     }
 
-    /// Any Pending Commands
+    /// Any pending peripheral Commands
     ///
     /// Check if any commands to PeripheralMgr are open
     /// Response depends on the `action`,
