@@ -1,4 +1,5 @@
 pub mod cmdmgr;
+pub mod database_mgr;
 pub mod hubgui;
 pub mod peripheral_mgr;
 
