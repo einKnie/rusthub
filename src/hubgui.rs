@@ -1,4 +1,6 @@
 use crate::cmdmgr::CmdMgr;
+use crate::database_mgr::database;
+use crate::database_mgr::message::{DBCmd, DBResp, DatabaseCmd, DatabaseQuery, DatabaseResp};
 use crate::peripheral_mgr::message::{HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg};
 use crate::peripheral_mgr::peripheral;
 use btleplug::api::BDAddr;
@@ -11,10 +13,15 @@ use eframe::egui::global_theme_preference_switch;
 ///
 /// This is basically the only thing we run from main at this point
 pub async fn run_gui() -> u32 {
-    let (gui_tx, thread_rx) = unbounded_channel();
-    let (thread_tx, gui_rx) = unbounded_channel();
+    // start peripheral manager
+    let (periph_tx, thread_periph_rx) = unbounded_channel();
+    let (thread_periph_tx, periph_rx) = unbounded_channel();
+    let mgr_handle = tokio::spawn(peripheral::mgr_run(thread_periph_tx, thread_periph_rx));
 
-    let mgr_handle = tokio::spawn(peripheral::mgr_run(thread_tx, thread_rx));
+    // spawn database manager
+    let (db_tx, thread_db_rx) = unbounded_channel();
+    let (thread_db_tx, db_rx) = unbounded_channel();
+    let db_handle = tokio::spawn(database::mgr_run(thread_db_tx, thread_db_rx));
 
     // determine path for storage
     let storage_path = match std::env::home_dir() {
@@ -42,7 +49,8 @@ pub async fn run_gui() -> u32 {
 
             Ok(Box::<MeasureApp>::new(MeasureApp::new(
                 cc,
-                (gui_tx, gui_rx),
+                (periph_tx, periph_rx),
+                (db_tx, db_rx),
             )))
         }),
     )
@@ -52,8 +60,9 @@ pub async fn run_gui() -> u32 {
     }
 
     // wait for manager to join
-    log::debug!("waiting for manager to join");
+    log::debug!("waiting for managers to join");
     mgr_handle.await.expect("PeripheralMgr thread has panicked");
+    db_handle.await.expect("DatabaseMgr thread has panicked");
 
     0
 }
@@ -100,6 +109,7 @@ struct ConnectedSensor {
     last: u32,
     subscribed: bool,
     show: bool,
+    database: bool,
 }
 
 impl PartialEq for ConnectedSensor {
@@ -123,6 +133,10 @@ impl ConnectedSensor {
     pub fn addr(&self) -> BDAddr {
         self.addr
     }
+
+    pub fn in_db(&self) -> bool {
+        self.database
+    }
 }
 
 /// UiAction
@@ -132,6 +146,7 @@ impl ConnectedSensor {
 #[derive(Clone, Debug, PartialEq)]
 enum UiAction {
     Peripheral(PeripheralAction),
+    Database(DatabaseAction),
 }
 
 /// PeripheralAction
@@ -148,11 +163,25 @@ enum PeripheralAction {
     Subscribe(BDAddr),
 }
 
+/// DatabaseAction
+///
+/// enum for actions wrt DatabaseMgr
+#[allow(unused)]
+#[derive(Clone, Debug, PartialEq)]
+enum DatabaseAction {
+    Any,
+    WriteSensor(BDAddr),
+    DeleteSensor(BDAddr),
+    WriteData(BDAddr),
+    ReadData(BDAddr),
+}
+
 /// App state
 #[derive(Clone, Debug)]
 struct MeasureAppState {
     sensors: Vec<ConnectedSensor>,
     pending_peripheral: CmdMgr<PeripheralCmd>,
+    pending_database: CmdMgr<DatabaseCmd>,
 }
 
 /// Mgr connection
@@ -165,6 +194,8 @@ struct MgrConnection<T, U> {
 /// Measurement GUI
 struct MeasureApp {
     peripheral: MgrConnection<PeripheralCmd, PeripheralMsg>,
+    database: MgrConnection<DatabaseCmd, DatabaseResp>,
+
     state: MeasureAppState,
 }
 
@@ -175,20 +206,40 @@ impl MeasureApp {
             UnboundedSender<PeripheralCmd>,
             UnboundedReceiver<PeripheralMsg>,
         ),
+        db_channels: (
+            UnboundedSender<DatabaseCmd>,
+            UnboundedReceiver<DatabaseResp>,
+        ),
     ) -> Self {
         let pending_p = CmdMgr::default();
         pending_p.start_handler();
+
+        let pending_db = CmdMgr::default();
+        pending_db.start_handler();
 
         Self {
             peripheral: MgrConnection {
                 tx: periph_channels.0,
                 rx: periph_channels.1,
             },
+            database: MgrConnection {
+                tx: db_channels.0,
+                rx: db_channels.1,
+            },
             state: MeasureAppState {
                 sensors: Vec::<ConnectedSensor>::new(),
                 pending_peripheral: pending_p,
+                pending_database: pending_db,
             },
         }
+    }
+
+    /// Send Command to the database
+    ///
+    /// This also adds the command to the pending database actions
+    fn send_database_command(&mut self, cmd: DBCmd) {
+        let cmd = self.state.pending_database.add(DatabaseCmd::new(cmd));
+        self.database.tx.send(cmd).unwrap();
     }
 
     /// Send Command to the Peripheral manager
@@ -212,6 +263,11 @@ impl MeasureApp {
 
         log::info!("pinging manager");
         self.send_peripheral_command(HubCmd::Ping);
+    }
+
+    fn ping_db(&mut self) {
+        log::info!("pinging database");
+        self.send_database_command(DBCmd::Ping);
     }
 
     fn blink(&mut self, addr: BDAddr) {
@@ -259,6 +315,9 @@ impl MeasureApp {
         // tell PeripheralMgr to stop
         self.send_peripheral_command(HubCmd::StopThread);
 
+        // tell database mrg to stop
+        self.send_database_command(DBCmd::StopThread);
+
         // works (https://github.com/emilk/egui/discussions/4103#discussioncomment-9225022)
         std::thread::spawn(move || {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -283,6 +342,13 @@ impl MeasureApp {
                         log::info!("Async received new sensor data for {addr:?}");
                         if let Some(p) = self.state.sensors.iter_mut().find(|p| p.addr == addr) {
                             p.last = data;
+                            if p.in_db() {
+                                self.send_database_command(DBCmd::AddEntry(
+                                    addr.into(),
+                                    chrono::Local::now(),
+                                    data,
+                                ));
+                            }
                         }
                     }
                     HubEvent::DeviceConnected(addr) => {
@@ -296,7 +362,12 @@ impl MeasureApp {
                             last: 0,
                             subscribed: false,
                             show: false,
+                            database: false,
                         });
+                        self.send_database_command(DBCmd::AddSensor(
+                            u64::from(addr),
+                            sensorname.value,
+                        ));
                     }
                     HubEvent::DeviceDisconnected(addr) => {
                         log::info!("Async Device Disconnected: {addr:?}");
@@ -349,9 +420,87 @@ impl MeasureApp {
                         log::info!("received read sensor data for {addr:?}");
                         if let Some(p) = self.state.sensors.iter_mut().find(|p| p.addr == addr) {
                             p.last = data;
+
+                            if p.in_db() {
+                                self.send_database_command(DBCmd::AddEntry(
+                                    addr.into(),
+                                    chrono::Local::now(),
+                                    data,
+                                ));
+                            }
                         }
                     }
                 };
+            }
+
+            // handle (or ignore) errors
+            Err(TryRecvError::Empty) => (),
+            Err(TryRecvError::Disconnected) => {
+                return -1;
+            }
+        }
+
+        match self.database.rx.try_recv() {
+            // handle Event message
+            Ok(DatabaseResp::Response(id, val)) => {
+                log::debug!("Received database response message");
+                if let Some(cmd) = self.state.pending_database.pop(id) {
+                    // at least for now, let's ignore the possibility of multiple cmds found
+                    log::debug!("Found matching command id in pending list for {val:?}!");
+
+                    if cmd.validate_response(&val) {
+                        log::debug!(
+                            "received matching response type for command: {cmd:?} => {val:?}"
+                        );
+                    } else {
+                        log::warn!(
+                            "received invalid response type for command: {cmd:?} => {val:?}"
+                        );
+                        return 1;
+                    }
+                } else {
+                    log::warn!(
+                        "Received unexpected response, no matching command found: {id:?},{val:?}"
+                    );
+                    return 1;
+                }
+                match val {
+                    DBResp::SensorAdded(a) => {
+                        if let Some(p) = self
+                            .state
+                            .sensors
+                            .iter_mut()
+                            .find(|p| u64::from(p.addr) == a)
+                        {
+                            p.database = true;
+                        }
+                    }
+                    DBResp::SensorKnown(a, name) => {
+                        if let Some(p) = self
+                            .state
+                            .sensors
+                            .iter_mut()
+                            .find(|p| u64::from(p.addr) == a)
+                        {
+                            p.name.next = name;
+                            p.name.update();
+                            p.database = true;
+                        }
+                    }
+                    DBResp::SensorDeleted(a) => {
+                        if let Some(p) = self
+                            .state
+                            .sensors
+                            .iter_mut()
+                            .find(|p| u64::from(p.addr) == a)
+                        {
+                            p.database = false;
+                        }
+                    }
+                    DBResp::Success => (),
+                    DBResp::Failed => (),
+                    DBResp::Data(_vec) => (),
+                }
             }
 
             // handle (or ignore) errors
@@ -400,6 +549,38 @@ impl MeasureApp {
                         .any(|c| matches!(c, HubCmd::Subscribe(a) if *a == addr)),
                 }
             }
+            UiAction::Database(act) => {
+                let kind = act;
+                let pending: Vec<_> = self
+                    .state
+                    .pending_database
+                    .get_current()
+                    .iter()
+                    .map(|cmd| cmd.msg.clone())
+                    .collect();
+
+                match kind {
+                    DatabaseAction::Any => !pending.is_empty(),
+                    DatabaseAction::WriteSensor(addr) => pending
+                        .iter()
+                        .any(|c| matches!(c, DBCmd::AddSensor(a, _) if *a == u64::from(addr))),
+                    DatabaseAction::DeleteSensor(addr) => pending
+                        .iter()
+                        .any(|c| matches!(c, DBCmd::DeleteSensor(a) if *a == u64::from(addr))),
+                    DatabaseAction::WriteData(addr) => pending
+                        .iter()
+                        .any(|c| matches!(c, DBCmd::AddEntry(a, _, _) if *a == u64::from(addr))),
+                    DatabaseAction::ReadData(addr) => pending.iter().any(|c| match c {
+                        DBCmd::Get(query) => match query {
+                            DatabaseQuery::TsAfter(a, _) if *a == u64::from(addr) => true,
+                            DatabaseQuery::TsBefore(a, _) if *a == u64::from(addr) => true,
+                            DatabaseQuery::TsDuration(a, _, _) if *a == u64::from(addr) => true,
+                            _ => false,
+                        },
+                        _ => false,
+                    }),
+                }
+            }
         }
     }
 }
@@ -411,7 +592,7 @@ impl eframe::App for MeasureApp {
             // show info dialog, then exit
             egui::containers::Modal::new(egui::Id::new("modal dialog")).show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.label("The PeripheralMgr thread has run into an issue.\nPlease check your Bluetooth adapter and restart the program.");
+                    ui.label("A thread has run into an issue.\nPlease check your Bluetooth adapter and database server and restart the program.");
                     if ui.button("Ok").clicked() {
                         let c = ctx.clone();
                         std::thread::spawn(move || {
@@ -549,8 +730,43 @@ impl eframe::App for MeasureApp {
                     if ui.button("Change Name").clicked() {
                         log::debug!("name change requested");
                         s.name.update();
+                        self.send_database_command(DBCmd::UpdateSensor(
+                            s.addr.into(),
+                            s.name.value.clone(),
+                        ));
                     }
                 });
+
+                if s.in_db() {
+                    if ui
+                        .add_enabled(
+                            !self.any_pending(UiAction::Database(DatabaseAction::DeleteSensor(
+                                s.addr,
+                            ))),
+                            egui::Button::new("Delete from DB"),
+                        )
+                        .clicked()
+                    {
+                        log::debug!("removing sensor from database");
+
+                        self.send_database_command(DBCmd::DeleteSensor(u64::from(s.addr)));
+                    }
+                } else {
+                    //if ui.button("add to database").clicked()
+                    if ui
+                        .add_enabled(
+                            !self.any_pending(UiAction::Database(DatabaseAction::WriteSensor(
+                                s.addr,
+                            ))),
+                            egui::Button::new("Add to DB"),
+                        )
+                        .clicked()
+                    {
+                        log::debug!("adding sensor to database");
+                        self.send_database_command(DBCmd::AddSensor(u64::from(s.addr), s.name()));
+                        s.database = true;
+                    }
+                }
 
                 ui.add(egui::Separator::default());
             }
@@ -562,6 +778,10 @@ impl eframe::App for MeasureApp {
             ui.horizontal(|ui| {
                 if ui.button("Ping").clicked() {
                     self.ping();
+                }
+
+                if ui.button("Ping DB").clicked() {
+                    self.ping_db();
                 }
 
                 if ui.button("Blink all").clicked() {
