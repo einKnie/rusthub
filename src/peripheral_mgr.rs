@@ -641,15 +641,23 @@ pub mod peripheral {
                             _ => ()
                         }
                     },
-                    Some(msg) = self.rx.recv() => {
-                        match msg.msg {
-                            HubCmd::StopThread => {
-                                log::info!("received stop command from main");
-                                break;
-                            },
-                            ref _other => {
-                                self.handle_cmd(msg).await;
+                    // rx.recv()returns None when the channel is closed,
+                    // so use that to stop the thread if the ui for some reason exits
+                    result = self.rx.recv() => {
+                        if let Some(msg) = result {
+                            match msg.msg {
+                                HubCmd::StopThread => {
+                                    log::info!("received stop command from main");
+                                    break;
+                                },
+                                ref _other => {
+                                    self.handle_cmd(msg).await;
+                                }
                             }
+                        } else {
+                            // channel was closed, better stop
+                            log::info!("channel to main is closed");
+                            break;
                         }
                     }
                 }
