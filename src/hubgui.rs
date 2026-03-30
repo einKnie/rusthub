@@ -48,9 +48,13 @@ pub async fn run_gui() -> u32 {
     }
 
     // wait for manager to join
-    log::debug!("waiting for managers to join");
-    mgr_handle.await.expect("PeripheralMgr thread has panicked");
-    db_handle.await.expect("DatabaseMgr thread has panicked");
+    let (mgr_res, db_res) = tokio::join!(mgr_handle, db_handle);
+    if let Err(e) = mgr_res {
+        log::debug!("PeripheralMgr thread has panicked: {e}")
+    }
+    if let Err(e) = db_res {
+        log::debug!("DatabaseMgr thread has panicked: {e}")
+    }
 
     0
 }
