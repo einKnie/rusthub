@@ -1,15 +1,8 @@
 // Database Messages
 use crate::cmdmgr::Command;
+use crate::database_mgr::data::DatabaseEntry;
 use chrono::{DateTime, Local};
 use std::sync::atomic::{AtomicU16, Ordering};
-
-#[derive(Debug, Clone)]
-pub struct DatabaseEntry {
-    pub sensor_id: String,
-    // @todo add hwid
-    pub ts: DateTime<Local>,
-    pub value: u32,
-}
 
 #[derive(Debug, Clone)]
 pub enum DatabaseQuery {

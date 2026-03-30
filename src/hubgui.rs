@@ -1,6 +1,9 @@
 use crate::cmdmgr::CmdMgr;
-use crate::database_mgr::database;
 use crate::database_mgr::message::{DBCmd, DBResp, DatabaseCmd, DatabaseQuery, DatabaseResp};
+use crate::database_mgr::{
+    data::{DatabaseEntry, charting},
+    database,
+};
 use crate::peripheral_mgr::message::{HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg};
 use crate::peripheral_mgr::peripheral;
 use btleplug::api::BDAddr;

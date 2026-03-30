@@ -3,7 +3,7 @@ pub mod error;
 pub mod message;
 
 pub mod database {
-    use crate::database_mgr::{error::DatabaseError, message::*};
+    use crate::database_mgr::{data::*, error::DatabaseError, message::*};
 
     use chrono::Local;
     use sqlx::{MySql, Pool};

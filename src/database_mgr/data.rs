@@ -1,6 +1,59 @@
+use chrono::{DateTime, Local};
+use std::cmp::Ordering;
+
+/// DatabaseEntry
+///
+/// represents a database entry returned on Get request
+/// and is used for charting
+#[derive(Debug, Clone)]
+pub struct DatabaseEntry {
+    pub sensor_addr: u64,
+    pub sensor_name: String,
+    pub ts: DateTime<Local>,
+    pub value: u32,
+}
+
+impl Default for DatabaseEntry {
+    fn default() -> Self {
+        DatabaseEntry {
+            sensor_addr: 0,
+            sensor_name: String::new(),
+            ts: Local::now(),
+            value: 0,
+        }
+    }
+}
+
+impl PartialEq for DatabaseEntry {
+    fn eq(&self, other: &DatabaseEntry) -> bool {
+        self.value == other.value && self.ts == other.ts
+    }
+}
+
+impl Eq for DatabaseEntry {}
+
+impl PartialOrd for DatabaseEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DatabaseEntry {
+    // sort by timestamp
+    fn cmp(&self, other: &DatabaseEntry) -> Ordering {
+        if self.ts == other.ts {
+            Ordering::Equal
+        } else if self.ts > other.ts {
+            Ordering::Greater
+        } else {
+            Ordering::Less
+        }
+    }
+}
+
 pub mod charting {
 
-    use crate::database_mgr::message::DatabaseEntry;
+    use crate::database_mgr::data::DatabaseEntry;
     use chrono::{DateTime, Local, TimeDelta};
     use itertools::Itertools;
     use plotters::prelude::*;
