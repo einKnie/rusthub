@@ -688,88 +688,99 @@ impl eframe::App for MeasureApp {
 
             ui.add(egui::Separator::default());
 
-            // TODO: I have to take this ugly route to be able to iterate through the sensors mutably
-            // with self.sensors.iter_mut() the whole self becomes mutably borrowed which messes things up here;
-            // find out if there is a better (canonical) way to do this
-            let mut sensors = self.state.sensors.clone();
-            // one button for each connected sensor
-            for s in sensors.iter_mut() {
-                if !s.show {
-                    continue;
-                }
-
-                // idea: have a 'box' per peripheral, with several buttons (read, blink, disconnect)
-                ui.add(egui::Label::new(format!("{0} ({1})", s.name(), s.value())));
-                ui.add(egui::Label::new(format!("{0}", s.addr())));
-                if ui
-                    .add_enabled(
-                        !self.any_pending(UiAction::Peripheral(PeripheralAction::Read(s.addr))),
-                        egui::Button::new("Read"),
-                    )
-                    .clicked()
-                {
-                    self.read_sensor(s.addr);
-                }
-                if ui
-                    .add_enabled(
-                        !self.any_pending(UiAction::Peripheral(PeripheralAction::Blink(s.addr))),
-                        egui::Button::new("Blink"),
-                    )
-                    .clicked()
-                {
-                    self.blink(s.addr);
-                }
-
-                if s.subscribed {
-                    if ui.button("Unsubscribe").clicked() {
-                        self.unsubscribe(s.addr);
-                        s.subscribed = false;
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                // TODO: I have to take this ugly route to be able to iterate through the sensors mutably
+                // with self.sensors.iter_mut() the whole self becomes mutably borrowed which messes things up here;
+                // find out if there is a better (canonical) way to do this
+                let mut sensors = self.state.sensors.clone();
+                // one button for each connected sensor
+                for s in sensors.iter_mut() {
+                    if !s.show {
+                        continue;
                     }
-                } else if ui.button("Subscribe").clicked() {
-                    self.subscribe(s.addr);
-                    s.subscribed = true;
-                }
 
-                // allow sensor name change
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut s.name.next));
-
-                    if ui.button("Change Name").clicked() {
-                        log::debug!("name change requested");
-                        s.name.update();
-                        self.send_database_command(DBCmd::UpdateSensor(s.id, s.name.value.clone()));
-                    }
-                });
-
-                if s.in_db() {
+                    // idea: have a 'box' per peripheral, with several buttons (read, blink, disconnect)
+                    ui.add(egui::Label::new(format!("{0} ({1})", s.name(), s.value())));
+                    ui.add(egui::Label::new(format!("{0}", s.addr())));
                     if ui
                         .add_enabled(
-                            !self.any_pending(UiAction::Database(DatabaseAction::DeleteSensor(
-                                s.id,
-                            ))),
-                            egui::Button::new("Delete from DB"),
+                            !self.any_pending(UiAction::Peripheral(PeripheralAction::Read(s.addr))),
+                            egui::Button::new("Read"),
                         )
                         .clicked()
                     {
-                        log::debug!("removing sensor from database");
-                        self.send_database_command(DBCmd::DeleteSensor(s.id));
+                        self.read_sensor(s.addr);
                     }
-                } else if ui
-                    .add_enabled(
-                        !self.any_pending(UiAction::Database(DatabaseAction::WriteSensor(s.addr))),
-                        egui::Button::new("Add to DB"),
-                    )
-                    .clicked()
-                {
-                    log::debug!("adding sensor to database");
-                    self.send_database_command(DBCmd::AddSensor(u64::from(s.addr), s.name()));
+                    if ui
+                        .add_enabled(
+                            !self
+                                .any_pending(UiAction::Peripheral(PeripheralAction::Blink(s.addr))),
+                            egui::Button::new("Blink"),
+                        )
+                        .clicked()
+                    {
+                        self.blink(s.addr);
+                    }
+
+                    if s.subscribed {
+                        if ui.button("Unsubscribe").clicked() {
+                            self.unsubscribe(s.addr);
+                            s.subscribed = false;
+                        }
+                    } else if ui.button("Subscribe").clicked() {
+                        self.subscribe(s.addr);
+                        s.subscribed = true;
+                    }
+
+                    // allow sensor name change
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut s.name.next));
+
+                        if ui.button("Change Name").clicked() {
+                            log::debug!("name change requested");
+                            s.name.update();
+                            self.send_database_command(DBCmd::UpdateSensor(
+                                s.id,
+                                s.name.value.clone(),
+                            ));
+                        }
+                    });
+
+                    if s.in_db() {
+                        if ui.button("get stored data").clicked() {
+                            self.get_data(s.id);
+                        }
+                        if ui
+                            .add_enabled(
+                                !self.any_pending(UiAction::Database(
+                                    DatabaseAction::DeleteSensor(s.id),
+                                )),
+                                egui::Button::new("Delete from DB"),
+                            )
+                            .clicked()
+                        {
+                            log::debug!("removing sensor from database");
+                            self.send_database_command(DBCmd::DeleteSensor(s.id));
+                        }
+                    } else if ui
+                        .add_enabled(
+                            !self.any_pending(UiAction::Database(DatabaseAction::WriteSensor(
+                                s.addr,
+                            ))),
+                            egui::Button::new("Add to DB"),
+                        )
+                        .clicked()
+                    {
+                        log::debug!("adding sensor to database");
+                        self.send_database_command(DBCmd::AddSensor(u64::from(s.addr), s.name()));
+                    }
+
+                    ui.add(egui::Separator::default());
                 }
 
-                ui.add(egui::Separator::default());
-            }
-
-            // update sensors (in case smth was changed)
-            self.state.sensors = sensors.clone();
+                // update sensors (in case smth was changed)
+                self.state.sensors = sensors.clone();
+            });
 
             // general interface (independent from connected sensors)
             ui.horizontal(|ui| {
