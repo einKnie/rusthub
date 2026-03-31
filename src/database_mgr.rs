@@ -289,7 +289,23 @@ pub mod database {
 
                     match query {
                         DatabaseQuery::SensorID(addr) => {
-                            log::debug!("SensorId query for {addr:?}")
+                            log::debug!("SensorId query for {addr:?}");
+                            let id = match self.get_id(addr).await {
+                                Ok(id) => {
+                                    log::debug!("got sensor id: {id:?}");
+                                    id
+                                }
+                                Err(_) => {
+                                    task_tx
+                                        .send(DatabaseResp::Response(cmd.id, DBResp::Failed))
+                                        .unwrap();
+                                    return;
+                                }
+                            };
+
+                            task_tx
+                                .send(DatabaseResp::Response(cmd.id, DBResp::SensorId(addr, id)))
+                                .unwrap();
                         }
                         DatabaseQuery::Latest(addr) => {
                             log::debug!("get latest value for sensor {addr:?}")
@@ -345,11 +361,6 @@ pub mod database {
                             }
                         }
                     }
-
-                    // @todo handle individual commands here. this is just a placeholder
-                    task_tx
-                        .send(DatabaseResp::Response(cmd.id, DBResp::Success))
-                        .unwrap();
                 }
                 DBCmd::StopThread => (), // handled elsewhere
             }
