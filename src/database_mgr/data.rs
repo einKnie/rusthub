@@ -61,14 +61,19 @@ pub mod charting {
     const MIN_WIDTH: usize = 680;
     const MAX_WIDTH: usize = 900;
     const WIDTH_PER_ITEM: usize = 100;
+    const DEFAULT_TIME_DELTA_S: i64 = 10;
     const MAX_TIME_DELTA_S: i64 = 30;
     const DEFAULT_FILENAME: &str = "chart";
 
     /// find lowest and highest datetime to generate a range value for the chart x axis
+    /// challenge: min and max should overshoot by ~1delta, to make chart look good
+    /// and while i know that generally delta will be 10s, i should not take that for granted ..but for now i will
     fn get_timestamp_range(data: Vec<DatabaseEntry>) -> std::ops::Range<DateTime<Local>> {
-        let x_min = data.iter().min().unwrap();
-        let x_max = data.iter().max().unwrap();
-        x_min.ts..x_max.ts
+        let x_min = data.iter().min().unwrap().ts;
+        let x_max = data.iter().max().unwrap().ts;
+        // looks a bit weird on small dataseta, but who wants to chart two values anyway
+        (x_min - TimeDelta::seconds(DEFAULT_TIME_DELTA_S))
+            ..(x_max + TimeDelta::seconds(DEFAULT_TIME_DELTA_S))
     }
 
     // find lowest and highest value to generate range value for chart y axis
@@ -83,28 +88,30 @@ pub mod charting {
     /// two sequential entries show a time difference of over `MAX_TIME_DELTA` seconds.
     ///
     /// first, iterate over the data in tuples (0,1)(1,2)(2,3)...
-    ///    if time delta exceeds threshold, store current index in vec `indices`.
+    ///    if time delta exceeds threshold, store current index+1 in vec `indices`.
     ///    specifically, index+1 because of the tuples, see example:
-    ///
+    ///     ```
     ///    data: [1, 2, 3, 35, 36, 37, 90, 91]
     ///    tuples: [(1,2),(2,3),(3,35),(35,36),(36,37),(37,90),(90,91)]
     ///                           x                       x
     ///    split_indices: [3, 5]
+    ///     ```
     ///
     /// then, split the data
     ///    When it comes to splitting up the data, we iterate the indices in reverse,
     ///    split data at index given. we push the right side to the result,
     ///    and set left side as data for next round.
-    ///
+    ///     ```
     ///    data: [1, 2, 3, 35, 36, 37, 90, 91]
     ///    split_indices: [3, 5]
     ///
     ///      1. split data at idx 5, push [90,91] to vec and set [1,2,3,35,36,37] as new data
     ///      2. split data at idx 3, psh [35,36,37] to vec and set [1,2,3] as new data
-    ///      3. finally, append remainind data to vec, and reverse so we have the chunks from earliest to latest
+    ///      3. finally, append remaining data to vec, and reverse so we have the chunks from earliest to latest
     ///    split_data: [
     ///       [1,2,3],[35,36,37],[90,91]
     ///    ]
+    ///     ```
     fn chunk_data(orig: Vec<DatabaseEntry>) -> Vec<Vec<DatabaseEntry>> {
         // make sure data is sorted
         let mut data = orig.clone();
@@ -128,7 +135,7 @@ pub mod charting {
             split_data.push(Vec::from(right));
             data = Vec::from(left);
         }
-        split_data.push(Vec::from(data));
+        split_data.push(data);
         split_data.reverse();
 
         dbg!(&split_data);
@@ -157,7 +164,6 @@ pub mod charting {
     /// Draw a single chart from the provided data
     ///
     ///
-    /// todo: when only one datapoint, draw a dot, otherwise the chart is empty
     fn draw_single_svg_chart(filename_appdx: &str, title: &str, data: Vec<DatabaseEntry>) {
         // get ranges
         let x_range = get_timestamp_range(data.clone());
@@ -168,20 +174,24 @@ pub mod charting {
             // what matters here is: i want the timestamps to be readable still,
             // so chart must be wide enough to facilitate this
             let items = data.len();
-            std::cmp::max(std::cmp::min(WIDTH_PER_ITEM * items, MAX_WIDTH), MIN_WIDTH) as u32
+            (WIDTH_PER_ITEM * items).clamp(MIN_WIDTH, MAX_WIDTH) as u32
         };
 
-        let appdx = match filename_appdx {
-            "" => String::new(),
-            any => {
-                format!("_{any}")
-            }
+        let filename = {
+            let appdx = match filename_appdx {
+                "" => String::new(),
+                any => {
+                    format!("_{any}")
+                }
+            };
+            format!("{}{}.svg", DEFAULT_FILENAME, appdx)
         };
-        let filename = format!("{}{}.svg", DEFAULT_FILENAME, appdx);
-        let root = SVGBackend::new(filename.as_str(), (width, 480)).into_drawing_area();
 
-        let _ = root.fill(&WHITE);
-        let root = root.margin(10, 10, 10, 10);
+        let root = {
+            let r = SVGBackend::new(filename.as_str(), (width, 480)).into_drawing_area();
+            let _ = r.fill(&WHITE);
+            r.margin(10, 10, 10, 10)
+        };
 
         let mut chart = ChartBuilder::on(&root)
             .caption(title, ("sans-serif", 50.0))
@@ -202,10 +212,9 @@ pub mod charting {
             .unwrap();
 
         chart
-            .draw_series(LineSeries::new(
-                data.into_iter().map(|x| (x.ts, x.value)),
-                &RED,
-            ))
+            .draw_series(
+                LineSeries::new(data.into_iter().map(|x| (x.ts, x.value)), &RED).point_size(2),
+            )
             .unwrap();
 
         // To avoid the IO failure being ignored silently, we manually call the present function
