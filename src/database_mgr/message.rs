@@ -5,23 +5,6 @@ use crate::database_mgr::data::DatabaseEntry;
 use chrono::{DateTime, Local};
 use std::sync::atomic::{AtomicU16, Ordering};
 
-/// DatabaseQuery
-///
-/// Represents a specific Get request to the DatabaseMgr
-#[derive(Debug, Clone)]
-pub enum DatabaseQuery {
-    /// Request sensor id from sensor address
-    SensorID(u64),
-    /// Request latest datapoint for sensor
-    Latest(i32),
-    /// Request datapoints for sensor before a given date
-    TsBefore(i32, DateTime<Local>),
-    /// Request datapoints for sensor after a given date
-    TsAfter(i32, DateTime<Local>),
-    /// Request datapoints for sensor in a given time range
-    TsDuration(i32, DateTime<Local>, DateTime<Local>),
-}
-
 /// Database Resp
 ///
 /// Sent from DatabaseMgr in Response to a DatabaseCmd
@@ -35,7 +18,7 @@ pub enum DBResp {
     SensorKnown(u64, String, i32),
     /// Sensor with addr was added to DB
     SensorAdded(u64),
-    /// Sensor with addr was deleted from DB
+    /// Sensor with id was deleted from DB
     SensorDeleted(i32),
     /// Generic Success
     Success,
@@ -74,6 +57,22 @@ pub enum DBCmd {
     StopThread,
 }
 
+/// DatabaseQuery
+///
+/// Represents a specific Get request to the DatabaseMgr
+#[derive(Debug, Clone)]
+pub enum DatabaseQuery {
+    /// Request sensor id from sensor address
+    SensorID(u64),
+    /// Request latest datapoint for sensor
+    Latest(i32),
+    /// Request datapoints for sensor before a given date
+    TsBefore(i32, DateTime<Local>),
+    /// Request datapoints for sensor after a given date
+    TsAfter(i32, DateTime<Local>),
+    /// Request datapoints for sensor in a given time range
+    TsDuration(i32, DateTime<Local>, DateTime<Local>),
+}
 /// DatabaseCmd
 ///
 /// Sent from hub to Database, contains the cmd id and the command
