@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 /// and is used for charting
 #[derive(Debug, Clone)]
 pub struct DatabaseEntry {
-    pub sensor_addr: u64,
+    pub sensor_id: i32,
     pub sensor_name: String,
     pub ts: DateTime<Local>,
     pub value: u32,
@@ -16,7 +16,7 @@ pub struct DatabaseEntry {
 impl Default for DatabaseEntry {
     fn default() -> Self {
         DatabaseEntry {
-            sensor_addr: 0,
+            sensor_id: 0,
             sensor_name: String::new(),
             ts: Local::now(),
             value: 0,

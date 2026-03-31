@@ -201,11 +201,9 @@ pub mod database {
                         .send(DatabaseResp::Response(cmd.id, DBResp::Success))
                         .unwrap();
                 }
-                DBCmd::AddEntry(addr, ts, value) => {
-                    log::debug!(
-                        "adding entry to database for sensor: {addr:?} ({ts:?}, {value:?})"
-                    );
-                    match self.add_datapoint(addr, ts, value).await {
+                DBCmd::AddEntry(id, ts, value) => {
+                    log::debug!("adding entry to database for sensor: {id:?} ({ts:?}, {value:?})");
+                    match self.add_datapoint(id, ts, value).await {
                         Err(_) => {
                             log::warn!("Failed to add entry to database!");
                             task_tx
@@ -250,9 +248,9 @@ pub mod database {
                         }
                     }
                 }
-                DBCmd::UpdateSensor(addr, name) => {
+                DBCmd::UpdateSensor(id, name) => {
                     log::debug!("Updating sensor with new name");
-                    match self.update_sensor(addr, name).await {
+                    match self.update_sensor(id, name).await {
                         Err(_) => {
                             log::warn!("Failed to update sensor data!");
                             task_tx
@@ -267,9 +265,9 @@ pub mod database {
                         }
                     }
                 }
-                DBCmd::DeleteSensor(addr) => {
-                    log::debug!("DELETING SENSOR from database: {addr:?}");
-                    match self.delete_sensor(addr).await {
+                DBCmd::DeleteSensor(id) => {
+                    log::debug!("DELETING SENSOR from database: {id:?}");
+                    match self.delete_sensor(id).await {
                         Err(_) => {
                             log::warn!("Failed to remove sensor from database!");
                             task_tx
@@ -279,7 +277,7 @@ pub mod database {
                         Ok(_) => {
                             log::debug!("removed sensor from database");
                             task_tx
-                                .send(DatabaseResp::Response(cmd.id, DBResp::SensorDeleted(addr)))
+                                .send(DatabaseResp::Response(cmd.id, DBResp::SensorDeleted(id)))
                                 .unwrap();
                         }
                     }
@@ -307,12 +305,12 @@ pub mod database {
                                 .send(DatabaseResp::Response(cmd.id, DBResp::SensorId(addr, id)))
                                 .unwrap();
                         }
-                        DatabaseQuery::Latest(addr) => {
-                            log::debug!("get latest value for sensor {addr:?}")
+                        DatabaseQuery::Latest(id) => {
+                            log::debug!("get latest value for sensor {id:?}")
                         }
-                        DatabaseQuery::TsBefore(addr, ts) => {
-                            log::debug!("requested entries for {addr:?} before {ts:?}");
-                            match self.get_datapoints(addr, None, Some(ts)).await {
+                        DatabaseQuery::TsBefore(id, ts) => {
+                            log::debug!("requested entries for {id:?} before {ts:?}");
+                            match self.get_datapoints(id, None, Some(ts)).await {
                                 Ok(res) => {
                                     task_tx
                                         .send(DatabaseResp::Response(cmd.id, DBResp::Data(res)))
@@ -326,9 +324,9 @@ pub mod database {
                                 }
                             }
                         }
-                        DatabaseQuery::TsAfter(addr, ts) => {
-                            log::debug!("requested entries for {addr:?} after {ts:?}");
-                            match self.get_datapoints(addr, Some(ts), None).await {
+                        DatabaseQuery::TsAfter(id, ts) => {
+                            log::debug!("requested entries for {id:?} after {ts:?}");
+                            match self.get_datapoints(id, Some(ts), None).await {
                                 Ok(res) => {
                                     task_tx
                                         .send(DatabaseResp::Response(cmd.id, DBResp::Data(res)))
@@ -342,11 +340,9 @@ pub mod database {
                                 }
                             }
                         }
-                        DatabaseQuery::TsDuration(addr, ts, ts2) => {
-                            log::debug!(
-                                "requested entries for {addr:?} between {ts:?} and {ts2:?}"
-                            );
-                            match self.get_datapoints(addr, Some(ts), Some(ts2)).await {
+                        DatabaseQuery::TsDuration(id, ts, ts2) => {
+                            log::debug!("requested entries for {id:?} between {ts:?} and {ts2:?}");
+                            match self.get_datapoints(id, Some(ts), Some(ts2)).await {
                                 Ok(res) => {
                                     task_tx
                                         .send(DatabaseResp::Response(cmd.id, DBResp::Data(res)))
@@ -402,9 +398,17 @@ pub mod database {
         }
 
         /// Update sensor data (actually just name)
-        async fn update_sensor(&mut self, addr: u64, name: String) -> Result<(), DatabaseError> {
+        async fn update_sensor(&mut self, id: i32, name: String) -> Result<(), DatabaseError> {
             let pool = self.pool.clone().unwrap();
 
+            // find sensor addr
+            let addr = match self.get_addr(id).await {
+                Ok(a) => {
+                    log::debug!("got sensor id: {id:?}");
+                    a
+                }
+                Err(e) => return Err(e),
+            };
             // update the db entry
             match sqlx::query(
                 format!(
@@ -429,18 +433,12 @@ pub mod database {
         }
 
         /// Delete a sensor (and all associated data) from database
-        async fn delete_sensor(&mut self, addr: u64) -> Result<(), DatabaseError> {
+        async fn delete_sensor(&mut self, id: i32) -> Result<(), DatabaseError> {
             let pool = self.pool.clone().unwrap();
-
-            // find sensor id
-            let sensor_id = match self.get_id(addr).await {
-                Ok(id) => id,
-                Err(e) => return Err(e),
-            };
 
             // first, delete associated data entries
             match sqlx::query(format!("DELETE FROM {} WHERE id = ?", DATA_TABLE).as_str())
-                .bind(sensor_id)
+                .bind(id)
                 .execute(&pool)
                 .await
             {
@@ -452,7 +450,7 @@ pub mod database {
             }
 
             match sqlx::query(format!("DELETE FROM {} WHERE id = ?", SENSORS_TABLE).as_str())
-                .bind(sensor_id)
+                .bind(id)
                 .execute(&pool)
                 .await
             {
@@ -468,20 +466,11 @@ pub mod database {
         /// Add datapoint for sensor
         async fn add_datapoint(
             &mut self,
-            addr: u64,
+            id: i32,
             ts: chrono::DateTime<Local>,
             val: u32,
         ) -> Result<(), DatabaseError> {
             let pool = self.pool.clone().unwrap();
-
-            // find sensor id
-            let sensor_id = match self.get_id(addr).await {
-                Ok(id) => {
-                    log::debug!("got sensor id: {id:?}");
-                    id
-                }
-                Err(e) => return Err(e),
-            };
 
             match sqlx::query(
                 format!(
@@ -491,7 +480,7 @@ pub mod database {
                 )
                 .as_str(),
             )
-            .bind(sensor_id)
+            .bind(id)
             .bind(ts)
             .bind(val)
             .execute(&pool)
@@ -508,14 +497,14 @@ pub mod database {
 
         async fn get_datapoints(
             &mut self,
-            addr: u64,
+            id: i32,
             first: Option<chrono::DateTime<Local>>,
             last: Option<chrono::DateTime<Local>>,
         ) -> Result<Vec<DatabaseEntry>, DatabaseError> {
             let pool = self.pool.clone().unwrap();
 
-            // find sensor id and name
-            let (sensor_id, sensor_name) = match self.get_id_and_name(addr).await {
+            // find sensor name
+            let sensor_name = match self.get_name(id).await {
                 Ok(id) => {
                     log::debug!("got sensor id: {id:?}");
                     id
@@ -523,109 +512,79 @@ pub mod database {
                 Err(e) => return Err(e),
             };
 
-            let result: Vec<DatabaseEntry> = match (first, last) {
-                (None, None) => return Err(DatabaseError::Failed),
+            let res = match (first, last) {
+                (None, None) => {
+                    // @todo maybe use this case to request _all_ data for a sensor?
+                    // currently doing this by requesting all data before _now_, but this might be cleaner
+                    Err(DatabaseError::Failed)
+                }
                 (Some(start), None) => {
                     // get entries AFTER start
-                    let res: Vec<(chrono::DateTime<Local>, u32)> = match sqlx::query_as(
+                    sqlx::query_as(
                         format!(
                             "SELECT ts, value FROM {} WHERE id = ? AND ts > ?",
                             DATA_TABLE
                         )
                         .as_str(),
                     )
-                    .bind(sensor_id)
+                    .bind(id)
                     .bind(start)
                     .fetch_all(&pool)
                     .await
-                    {
-                        Ok(datapoints) => {
-                            log::debug!("got data");
-                            datapoints
-                        }
-                        Err(e) => {
-                            log::debug!("failed to fetch datapoints from database");
-                            return Err(DatabaseError::GeneralError(Box::new(e)));
-                        }
-                    };
-                    res.iter()
-                        .map(|x| DatabaseEntry {
-                            sensor_addr: addr,
-                            sensor_name: sensor_name.clone(),
-                            ts: x.0,
-                            value: x.1,
-                        })
-                        .collect()
+                    .map_err(|_| DatabaseError::Failed)
                 }
                 (None, Some(end)) => {
                     // get entried BEFORE end
-                    // get entries AFTER start
-                    let res: Vec<(chrono::DateTime<Local>, u32)> = match sqlx::query_as(
+                    sqlx::query_as(
                         format!(
                             "SELECT ts, value FROM {} WHERE id = ? AND ts < ?",
                             DATA_TABLE
                         )
                         .as_str(),
                     )
-                    .bind(sensor_id)
+                    .bind(id)
                     .bind(end)
                     .fetch_all(&pool)
                     .await
-                    {
-                        Ok(datapoints) => {
-                            log::debug!("got data");
-                            datapoints
-                        }
-                        Err(e) => {
-                            log::debug!("failed to fetch datapoints from database");
-                            return Err(DatabaseError::GeneralError(Box::new(e)));
-                        }
-                    };
-                    res.iter()
-                        .map(|x| DatabaseEntry {
-                            sensor_addr: addr,
-                            sensor_name: sensor_name.clone(),
-                            ts: x.0,
-                            value: x.1,
-                        })
-                        .collect()
+                    .map_err(|_| DatabaseError::Failed)
                 }
                 (Some(start), Some(end)) => {
                     // get entried BETWEEN start and end
-                    // get entries AFTER start
-                    let res: Vec<(chrono::DateTime<Local>, u32)> = match sqlx::query_as(
+                    sqlx::query_as(
                         format!(
                             "SELECT ts, value FROM {} WHERE id = ? AND ts < ? AND ts > ?",
                             DATA_TABLE
                         )
                         .as_str(),
                     )
-                    .bind(sensor_id)
+                    .bind(id)
                     .bind(start)
                     .bind(end)
                     .fetch_all(&pool)
                     .await
-                    {
-                        Ok(datapoints) => {
-                            log::debug!("got data");
-                            datapoints
-                        }
-                        Err(e) => {
-                            log::debug!("failed to fetch datapoints from database");
-                            return Err(DatabaseError::GeneralError(Box::new(e)));
-                        }
-                    };
-                    res.iter()
-                        .map(|x| DatabaseEntry {
-                            sensor_addr: addr,
-                            sensor_name: sensor_name.clone(),
-                            ts: x.0,
-                            value: x.1,
-                        })
-                        .collect()
+                    .map_err(|_| DatabaseError::Failed)
                 }
             };
 
+            // map received data to DatabaseEntries
+            let result: Vec<DatabaseEntry> = match res {
+                Ok(datapoints) => {
+                    log::debug!("got data");
+                    datapoints
+                        .iter()
+                        .map(|(x, y)| DatabaseEntry {
+                            sensor_id: id,
+                            sensor_name: sensor_name.clone(),
+                            ts: *x,
+                            value: *y,
+                        })
+                        .collect()
+                }
+                Err(e) => {
+                    log::debug!("failed to fetch datapoints from database");
+                    return Err(e);
+                }
+            };
             Ok(result)
         }
 
@@ -651,6 +610,54 @@ pub mod database {
                 }
                 Err(e) => {
                     log::debug!("sensor with addr {addr:?} not found: {e:?}");
+                    return Err(DatabaseError::GeneralError(Box::new(e)));
+                }
+            };
+            Ok(res.0)
+        }
+
+        /// Get sensor name
+        async fn get_name(&mut self, id: i32) -> Result<String, DatabaseError> {
+            let pool = self.pool.clone().unwrap();
+
+            // find sensor id
+            let res: (u64, String) = match sqlx::query_as(
+                format!("SELECT addr, name FROM {} WHERE id = ?", SENSORS_TABLE).as_str(),
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            {
+                Ok((addr, name)) => {
+                    log::debug!("got sensor name: {name:?}");
+                    (addr, name)
+                }
+                Err(e) => {
+                    log::debug!("sensor with id {id:?} not found: {e:?}");
+                    return Err(DatabaseError::GeneralError(Box::new(e)));
+                }
+            };
+            Ok(res.1)
+        }
+
+        /// Get sensor address
+        async fn get_addr(&mut self, id: i32) -> Result<u64, DatabaseError> {
+            let pool = self.pool.clone().unwrap();
+
+            // find sensor id
+            let res: (u64, String) = match sqlx::query_as(
+                format!("SELECT addr, name FROM {} WHERE id = ?", SENSORS_TABLE).as_str(),
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            {
+                Ok((addr, name)) => {
+                    log::debug!("got sensor name: {name:?}");
+                    (addr, name)
+                }
+                Err(e) => {
+                    log::debug!("sensor with id {id:?} not found: {e:?}");
                     return Err(DatabaseError::GeneralError(Box::new(e)));
                 }
             };

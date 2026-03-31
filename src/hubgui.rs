@@ -129,6 +129,10 @@ impl ConnectedSensor {
         self.addr
     }
 
+    pub fn id(&self) -> i32 {
+        self.id
+    }
+
     pub fn in_db(&self) -> bool {
         self.id != 0
     }
@@ -166,9 +170,9 @@ enum PeripheralAction {
 enum DatabaseAction {
     Any,
     WriteSensor(BDAddr),
-    DeleteSensor(BDAddr),
-    WriteData(BDAddr),
-    ReadData(BDAddr),
+    DeleteSensor(i32),
+    WriteData(i32),
+    ReadData(i32),
 }
 
 /// App state
@@ -336,9 +340,10 @@ impl MeasureApp {
                         log::info!("Async received new sensor data for {addr:?}");
                         if let Some(p) = self.state.sensors.iter_mut().find(|p| p.addr == addr) {
                             p.last = data;
+                            let id = p.id();
                             if p.in_db() {
                                 self.send_database_command(DBCmd::AddEntry(
-                                    addr.into(),
+                                    id,
                                     chrono::Local::now(),
                                     data,
                                 ));
@@ -411,10 +416,10 @@ impl MeasureApp {
                         log::info!("received read sensor data for {addr:?}");
                         if let Some(p) = self.state.sensors.iter_mut().find(|p| p.addr == addr) {
                             p.last = data;
-
+                            let id = p.id();
                             if p.in_db() {
                                 self.send_database_command(DBCmd::AddEntry(
-                                    addr.into(),
+                                    id,
                                     chrono::Local::now(),
                                     data,
                                 ));
@@ -480,13 +485,8 @@ impl MeasureApp {
                             p.id = id;
                         }
                     }
-                    DBResp::SensorDeleted(a) => {
-                        if let Some(p) = self
-                            .state
-                            .sensors
-                            .iter_mut()
-                            .find(|p| u64::from(p.addr) == a)
-                        {
+                    DBResp::SensorDeleted(id) => {
+                        if let Some(p) = self.state.sensors.iter_mut().find(|p| p.id == id) {
                             p.id = 0;
                         }
                     }
@@ -568,17 +568,17 @@ impl MeasureApp {
                     DatabaseAction::WriteSensor(addr) => pending
                         .iter()
                         .any(|c| matches!(c, DBCmd::AddSensor(a, _) if *a == u64::from(addr))),
-                    DatabaseAction::DeleteSensor(addr) => pending
+                    DatabaseAction::DeleteSensor(id) => pending
                         .iter()
-                        .any(|c| matches!(c, DBCmd::DeleteSensor(a) if *a == u64::from(addr))),
-                    DatabaseAction::WriteData(addr) => pending
+                        .any(|c| matches!(c, DBCmd::DeleteSensor(i) if *i == id)),
+                    DatabaseAction::WriteData(id) => pending
                         .iter()
-                        .any(|c| matches!(c, DBCmd::AddEntry(a, _, _) if *a == u64::from(addr))),
-                    DatabaseAction::ReadData(addr) => pending.iter().any(|c| match c {
+                        .any(|c| matches!(c, DBCmd::AddEntry(i, _, _) if *i == id)),
+                    DatabaseAction::ReadData(id) => pending.iter().any(|c| match c {
                         DBCmd::Get(query) => match query {
-                            DatabaseQuery::TsAfter(a, _) if *a == u64::from(addr) => true,
-                            DatabaseQuery::TsBefore(a, _) if *a == u64::from(addr) => true,
-                            DatabaseQuery::TsDuration(a, _, _) if *a == u64::from(addr) => true,
+                            DatabaseQuery::TsAfter(i, _) if *i == id => true,
+                            DatabaseQuery::TsBefore(i, _) if *i == id => true,
+                            DatabaseQuery::TsDuration(i, _, _) if *i == id => true,
                             _ => false,
                         },
                         _ => false,
@@ -733,10 +733,7 @@ impl eframe::App for MeasureApp {
                     if ui.button("Change Name").clicked() {
                         log::debug!("name change requested");
                         s.name.update();
-                        self.send_database_command(DBCmd::UpdateSensor(
-                            s.addr.into(),
-                            s.name.value.clone(),
-                        ));
+                        self.send_database_command(DBCmd::UpdateSensor(s.id, s.name.value.clone()));
                     }
                 });
 
@@ -744,14 +741,14 @@ impl eframe::App for MeasureApp {
                     if ui
                         .add_enabled(
                             !self.any_pending(UiAction::Database(DatabaseAction::DeleteSensor(
-                                s.addr,
+                                s.id,
                             ))),
                             egui::Button::new("Delete from DB"),
                         )
                         .clicked()
                     {
                         log::debug!("removing sensor from database");
-                        self.send_database_command(DBCmd::DeleteSensor(u64::from(s.addr)));
+                        self.send_database_command(DBCmd::DeleteSensor(s.id));
                     }
                 } else if ui
                     .add_enabled(

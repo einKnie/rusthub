@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicU16, Ordering};
 #[derive(Debug, Clone)]
 pub enum DatabaseQuery {
     SensorID(u64),
-    Latest(u64),
-    TsBefore(u64, DateTime<Local>),
-    TsAfter(u64, DateTime<Local>),
-    TsDuration(u64, DateTime<Local>, DateTime<Local>),
+    Latest(i32),
+    TsBefore(i32, DateTime<Local>),
+    TsAfter(i32, DateTime<Local>),
+    TsDuration(i32, DateTime<Local>, DateTime<Local>),
 }
 
 /// Database Resp
@@ -22,7 +22,7 @@ pub enum DBResp {
     SensorId(u64, i32),
     SensorKnown(u64, String, i32),
     SensorAdded(u64),
-    SensorDeleted(u64),
+    SensorDeleted(i32),
     Success,
     Failed,
 }
@@ -39,12 +39,19 @@ pub enum DatabaseResp {
 /// To be used for thread control as well as database commands)
 #[derive(Debug, Clone)]
 pub enum DBCmd {
+    ///< ping database mgr
     Ping,
-    AddEntry(u64, DateTime<Local>, u32),
+    ///< Add data entry (id, date, value)
+    AddEntry(i32, DateTime<Local>, u32),
+    ///< Add sensor (addr, name)
     AddSensor(u64, String),
-    UpdateSensor(u64, String),
-    DeleteSensor(u64),
+    ///< update sensor name (id, new_name)
+    UpdateSensor(i32, String),
+    ///< Delete sensor form db (id)
+    DeleteSensor(i32),
+    // data query
     Get(DatabaseQuery),
+    // Stop the database_mgr thread
     StopThread,
 }
 
