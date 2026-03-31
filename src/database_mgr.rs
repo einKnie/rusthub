@@ -260,7 +260,7 @@ pub mod database {
                                 .unwrap();
                         }
                         Ok(_) => {
-                            log::debug!("rupdated sensor data");
+                            log::debug!("updated sensor data");
                             task_tx
                                 .send(DatabaseResp::Response(cmd.id, DBResp::Success))
                                 .unwrap();

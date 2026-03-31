@@ -727,7 +727,6 @@ impl eframe::App for MeasureApp {
                 }
 
                 // allow sensor name change
-                // TODO: reset name.next to name if apply button is not clicked? e.g. on show changed?
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut s.name.next));
 
@@ -752,24 +751,17 @@ impl eframe::App for MeasureApp {
                         .clicked()
                     {
                         log::debug!("removing sensor from database");
-
                         self.send_database_command(DBCmd::DeleteSensor(u64::from(s.addr)));
                     }
-                } else {
-                    //if ui.button("add to database").clicked()
-                    if ui
-                        .add_enabled(
-                            !self.any_pending(UiAction::Database(DatabaseAction::WriteSensor(
-                                s.addr,
-                            ))),
-                            egui::Button::new("Add to DB"),
-                        )
-                        .clicked()
-                    {
-                        log::debug!("adding sensor to database");
-                        self.send_database_command(DBCmd::AddSensor(u64::from(s.addr), s.name()));
-                        s.database = true;
-                    }
+                } else if ui
+                    .add_enabled(
+                        !self.any_pending(UiAction::Database(DatabaseAction::WriteSensor(s.addr))),
+                        egui::Button::new("Add to DB"),
+                    )
+                    .clicked()
+                {
+                    log::debug!("adding sensor to database");
+                    self.send_database_command(DBCmd::AddSensor(u64::from(s.addr), s.name()));
                 }
 
                 ui.add(egui::Separator::default());
