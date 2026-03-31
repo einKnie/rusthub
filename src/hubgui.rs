@@ -466,7 +466,7 @@ impl MeasureApp {
                             p.database = true;
                         }
                     }
-                    DBResp::SensorKnown(a, name) => {
+                    DBResp::SensorKnown(a, name, id) => {
                         if let Some(p) = self
                             .state
                             .sensors

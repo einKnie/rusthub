@@ -19,7 +19,7 @@ pub enum DatabaseQuery {
 #[derive(Debug, Clone)]
 pub enum DBResp {
     Data(Vec<DatabaseEntry>),
-    SensorKnown(u64, String),
+    SensorKnown(u64, String, i32),
     SensorAdded(u64),
     SensorDeleted(u64),
     Success,

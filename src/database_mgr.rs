@@ -223,22 +223,19 @@ pub mod database {
                 DBCmd::AddSensor(addr, name) => {
                     log::debug!("adding new sensor: {name:?}");
 
-                    // fetch name in case we need it. @todo find a better way, cannot do this in the err handling b/c `addr` and await
-                    let saved_name = match self.get_name(addr).await {
-                        Ok(n) => n,
-                        Err(_) => String::from("unknown"),
-                    };
+                    if let Ok((server_id, server_name)) = self.get_id_and_name(addr).await {
+                        // we know that the sensor is in the database now
+                        log::warn!("sensor is already in database!");
+                        task_tx
+                            .send(DatabaseResp::Response(
+                                cmd.id,
+                                DBResp::SensorKnown(addr, server_name, server_id),
+                            ))
+                            .unwrap();
+                        return;
+                    }
 
                     match self.add_sensor(addr, name).await {
-                        Err(DatabaseError::Duplicate) => {
-                            log::warn!("sensor is already in database!");
-                            task_tx
-                                .send(DatabaseResp::Response(
-                                    cmd.id,
-                                    DBResp::SensorKnown(addr, saved_name),
-                                ))
-                                .unwrap();
-                        }
                         Err(_) => {
                             log::warn!("Failed to add sensor to database!");
                             task_tx
@@ -248,7 +245,7 @@ pub mod database {
                         Ok(_) => {
                             log::debug!("added sensor to database");
                             task_tx
-                                .send(DatabaseResp::Response(cmd.id, DBResp::Success))
+                                .send(DatabaseResp::Response(cmd.id, DBResp::SensorAdded(addr)))
                                 .unwrap();
                         }
                     }
@@ -506,15 +503,8 @@ pub mod database {
         ) -> Result<Vec<DatabaseEntry>, DatabaseError> {
             let pool = self.pool.clone().unwrap();
 
-            // find sensor id
-            let sensor_id = match self.get_id(addr).await {
-                Ok(id) => {
-                    log::debug!("got sensor id: {id:?}");
-                    id
-                }
-                Err(e) => return Err(e),
-            };
-            let sensor_name = match self.get_name(addr).await {
+            // find sensor id and name
+            let (sensor_id, sensor_name) = match self.get_id_and_name(addr).await {
                 Ok(id) => {
                     log::debug!("got sensor id: {id:?}");
                     id
@@ -657,7 +647,7 @@ pub mod database {
         }
 
         /// Get sensor name
-        async fn get_name(&mut self, addr: u64) -> Result<String, DatabaseError> {
+        async fn get_id_and_name(&mut self, addr: u64) -> Result<(i32, String), DatabaseError> {
             let pool = self.pool.clone().unwrap();
 
             // find sensor id
@@ -677,7 +667,7 @@ pub mod database {
                     return Err(DatabaseError::GeneralError(Box::new(e)));
                 }
             };
-            Ok(res.1)
+            Ok(res)
         }
     }
 }
