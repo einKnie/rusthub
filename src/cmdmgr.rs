@@ -1,6 +1,7 @@
 //! CmdMgr
 //!
 //! Command handling with response verification and timeouts
+//! Is generic and can manage any cmds that implement the Command trait
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -15,9 +16,9 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Generic Command trait
 /// for a command with an ID
-pub trait Command {
-    /// Id
-    type A;
+pub trait Command: Clone + Debug + Send + 'static {
+    /// Id, for comparison
+    type A: PartialEq;
     /// Message
     type B;
 
@@ -45,7 +46,7 @@ impl<T> Drop for CmdMgr<T> {
     }
 }
 
-impl<T> Default for CmdMgr<T> {
+impl<T: Command> Default for CmdMgr<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -53,10 +54,10 @@ impl<T> Default for CmdMgr<T> {
 
 /// Implement CmdMgr
 ///
-/// This requires T to satisfy several bounds, not sure how to specify this globally?
-/// T: Debug + Clone + Send + 'static + Command
+/// This requires T to satisfy several bounds, encompassed by the Command trait
+/// T: Debug + Clone + Send + 'static
 /// T::A: PartialEq
-impl<T> CmdMgr<T> {
+impl<T: Command> CmdMgr<T> {
     /// Create a new CommandMgr with default cmd timeout
     pub fn new() -> Self {
         CmdMgr {
@@ -75,10 +76,7 @@ impl<T> CmdMgr<T> {
     ///
     /// On add, a timestamp is generated and stored alongside the cmd
     /// also returns the command, so it can be further used by the caller
-    pub fn add(&mut self, cmd: T) -> T
-    where
-        T: Clone,
-    {
+    pub fn add(&mut self, cmd: T) -> T {
         self.pending
             .lock()
             .unwrap()
@@ -90,11 +88,7 @@ impl<T> CmdMgr<T> {
     ///
     /// If a pending command with the given id is found,
     /// remove it from the pending list and return
-    pub fn pop(&mut self, id: T::A) -> Option<T>
-    where
-        T: Command,
-        T::A: PartialEq,
-    {
+    pub fn pop(&mut self, id: T::A) -> Option<T> {
         let mut found: Vec<_> = self
             .pending
             .lock()
@@ -112,10 +106,7 @@ impl<T> CmdMgr<T> {
     }
 
     /// Return a copy of all currently pending commands
-    pub fn get_current(&self) -> Vec<T>
-    where
-        T: Clone,
-    {
+    pub fn get_current(&self) -> Vec<T> {
         self.pending.lock().unwrap().clone().into_values().collect()
     }
 
@@ -123,10 +114,7 @@ impl<T> CmdMgr<T> {
     ///
     /// Check pending commands in `CHECK_INTERVAL` interevals
     /// and remove any messages that have exceeded the timeout
-    pub fn start_handler(&self)
-    where
-        T: Debug + Send + 'static,
-    {
+    pub fn start_handler(&self) {
         let token = self.cancel_token.clone();
         let p = Arc::clone(&self.pending);
         let t = self.timeout;
