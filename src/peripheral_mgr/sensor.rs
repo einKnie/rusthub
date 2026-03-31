@@ -84,11 +84,7 @@ impl SensorPeripheral {
         }
 
         match self.peripheral.connect().await {
-            Ok(_) => {
-                log::debug!("Connected to sensor device");
-                log::debug!("Peripheral id: {:?}", self.peripheral.id());
-                Ok(())
-            }
+            Ok(_) => Ok(()),
             Err(_) => Err(PeripheralError::ConnectionError),
         }
     }

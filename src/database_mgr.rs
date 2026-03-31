@@ -72,7 +72,7 @@ pub mod database {
                     .ok();
 
                 if self.pool.is_none() {
-                    log::debug!("failed to connect to database");
+                    log::warn!("failed to connect to database");
                     return Err(DatabaseError::NoConnection);
                 }
 
@@ -101,11 +101,11 @@ pub mod database {
                     .await
                     .is_err()
                 {
-                    log::debug!("failed to use database");
+                    log::warn!("failed to use database");
                     return Err(DatabaseError::Failed);
                 }
             } else {
-                log::debug!("failed to create database");
+                log::warn!("failed to create database");
                 return Err(DatabaseError::Failed);
             }
 
@@ -127,7 +127,7 @@ pub mod database {
             .await
             .is_err()
             {
-                log::debug!("failed to create sensor table");
+                log::warn!("failed to create sensor table");
                 return Err(DatabaseError::Failed);
             }
 
@@ -148,7 +148,7 @@ pub mod database {
             .await
             .is_err()
             {
-                log::debug!("failed to create data table");
+                log::warn!("failed to create data table");
                 return Err(DatabaseError::Failed);
             }
             Ok(())
@@ -182,7 +182,7 @@ pub mod database {
                             }
                         } else {
                             // channel was closed, better stop
-                            log::info!("channel to main is closed");
+                            log::warn!("channel to main is closed");
                             break;
                         }
                     }
@@ -257,7 +257,7 @@ pub mod database {
                     }
                 }
                 DBCmd::UpdateSensor(id, name) => {
-                    log::debug!("Updating sensor with new name");
+                    log::debug!("Updating sensor {id} with new name ({name})");
                     match self.update_sensor(id, name).await {
                         Err(_) => {
                             log::warn!("Failed to update sensor data!");
@@ -411,12 +411,10 @@ pub mod database {
 
             // find sensor addr
             let addr = match self.get_addr(id).await {
-                Ok(a) => {
-                    log::debug!("got sensor id: {id:?}");
-                    a
-                }
+                Ok(a) => a,
                 Err(e) => return Err(e),
             };
+
             // update the db entry
             match sqlx::query(
                 format!(
@@ -434,7 +432,7 @@ pub mod database {
             {
                 Ok(_) => Ok(()),
                 Err(e) => {
-                    log::debug!("failed to update sensor data: {e:?}");
+                    log::warn!("failed to update sensor data: {e:?}");
                     Err(DatabaseError::GeneralError(Box::new(e)))
                 }
             }
@@ -452,7 +450,7 @@ pub mod database {
             {
                 Ok(_) => (),
                 Err(e) => {
-                    log::debug!("failed to delete sensor data: {e:?}");
+                    log::warn!("failed to delete sensor data: {e:?}");
                     return Err(DatabaseError::GeneralError(Box::new(e)));
                 }
             }
@@ -464,7 +462,7 @@ pub mod database {
             {
                 Ok(_) => (),
                 Err(e) => {
-                    log::debug!("failed to delete sensor: {e:?}");
+                    log::warn!("failed to delete sensor: {e:?}");
                     return Err(DatabaseError::GeneralError(Box::new(e)));
                 }
             }
@@ -496,7 +494,7 @@ pub mod database {
             {
                 Ok(_) => (),
                 Err(e) => {
-                    log::debug!("failed to insert into data table: {e:?}");
+                    log::warn!("failed to insert into data table: {e:?}");
                     return Err(DatabaseError::GeneralError(Box::new(e)));
                 }
             }
@@ -514,10 +512,7 @@ pub mod database {
 
             // find sensor name
             let sensor_name = match self.get_name(id).await {
-                Ok(id) => {
-                    log::debug!("got sensor id: {id:?}");
-                    id
-                }
+                Ok(id) => id,
                 Err(e) => return Err(e),
             };
 
@@ -577,20 +572,17 @@ pub mod database {
 
             // map received data to DatabaseEntries
             let result: Vec<DatabaseEntry> = match res {
-                Ok(datapoints) => {
-                    log::debug!("got data");
-                    datapoints
-                        .iter()
-                        .map(|(x, y)| DatabaseEntry {
-                            sensor_id: id,
-                            sensor_name: sensor_name.clone(),
-                            ts: *x,
-                            value: *y,
-                        })
-                        .collect()
-                }
+                Ok(datapoints) => datapoints
+                    .iter()
+                    .map(|(x, y)| DatabaseEntry {
+                        sensor_id: id,
+                        sensor_name: sensor_name.clone(),
+                        ts: *x,
+                        value: *y,
+                    })
+                    .collect(),
                 Err(e) => {
-                    log::debug!("failed to fetch datapoints from database");
+                    log::warn!("failed to fetch datapoints from database");
                     return Err(e);
                 }
             };
@@ -613,12 +605,9 @@ pub mod database {
             .fetch_one(&pool)
             .await
             {
-                Ok(id) => {
-                    log::debug!("got sensor ID: {id:?}");
-                    id
-                }
+                Ok(id) => id,
                 Err(e) => {
-                    log::debug!("sensor with addr {addr:?} not found: {e:?}");
+                    log::warn!("sensor with addr {addr:?} not found: {e:?}");
                     return Err(DatabaseError::GeneralError(Box::new(e)));
                 }
             };
@@ -637,12 +626,9 @@ pub mod database {
             .fetch_one(&pool)
             .await
             {
-                Ok((addr, name)) => {
-                    log::debug!("got sensor name: {name:?}");
-                    (addr, name)
-                }
+                Ok((addr, name)) => (addr, name),
                 Err(e) => {
-                    log::debug!("sensor with id {id:?} not found: {e:?}");
+                    log::warn!("sensor with id {id:?} not found: {e:?}");
                     return Err(DatabaseError::GeneralError(Box::new(e)));
                 }
             };
@@ -661,12 +647,9 @@ pub mod database {
             .fetch_one(&pool)
             .await
             {
-                Ok((addr, name)) => {
-                    log::debug!("got sensor name: {name:?}");
-                    (addr, name)
-                }
+                Ok((addr, name)) => (addr, name),
                 Err(e) => {
-                    log::debug!("sensor with id {id:?} not found: {e:?}");
+                    log::warn!("sensor with id {id:?} not found: {e:?}");
                     return Err(DatabaseError::GeneralError(Box::new(e)));
                 }
             };
@@ -685,12 +668,9 @@ pub mod database {
             .fetch_one(&pool)
             .await
             {
-                Ok(res) => {
-                    log::debug!("got sensor ID: {res:?}");
-                    res
-                }
+                Ok(res) => res,
                 Err(e) => {
-                    log::debug!("sensor with addr {addr:?} not found: {e:?}");
+                    log::warn!("sensor with addr {addr:?} not found: {e:?}");
                     return Err(DatabaseError::GeneralError(Box::new(e)));
                 }
             };

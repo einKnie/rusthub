@@ -57,10 +57,10 @@ pub async fn run_gui() -> u32 {
     // wait for manager to join
     let (mgr_res, db_res) = tokio::join!(mgr_handle, db_handle);
     if let Err(e) = mgr_res {
-        log::debug!("PeripheralMgr thread has panicked: {e}")
+        log::warn!("PeripheralMgr thread has panicked: {e}")
     }
     if let Err(e) = db_res {
-        log::debug!("DatabaseMgr thread has panicked: {e}")
+        log::warn!("DatabaseMgr thread has panicked: {e}")
     }
 
     0
@@ -441,7 +441,7 @@ impl MeasureApp {
         }
 
         match self.database.rx.try_recv() {
-            // handle Event message
+            // handle response message
             Ok(DatabaseResp::Response(id, val)) => {
                 log::debug!("Received database response message");
                 if let Some(cmd) = self.database.pending.pop(id) {
@@ -473,7 +473,7 @@ impl MeasureApp {
                             .find(|p| u64::from(p.addr) == a)
                         {
                             // request sensor id
-                            log::debug!("Sensor was added to database-. requesting id");
+                            log::debug!("Sensor was added to database. requesting id");
                             self.send_database_command(DBCmd::Get(DatabaseQuery::SensorID(a)));
                         }
                     }

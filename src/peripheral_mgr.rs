@@ -257,8 +257,7 @@ pub mod peripheral {
             let mut stream = match p.peripheral.notifications().await {
                 Ok(s) => s,
                 Err(e) => {
-                    log::error!("Could not get notification stream from peripheral: {e:?}");
-                    panic!("Could not get notification stream");
+                    panic!("Could not get notification stream {e}");
                 }
             };
 
@@ -276,7 +275,6 @@ pub mod peripheral {
                                 continue;
                             }
                         };
-                        log::debug!("sending data to hub: {d:?}");
                         tx.send(PeripheralMsg::Event(HubEvent::NewData(p.addr, d))).unwrap();
                     },
                     Some(PeripheralCmd{id: _ , msg: HubCmd::StopThread}) = rx.recv() => {
@@ -313,7 +311,7 @@ pub mod peripheral {
                 }
 
                 HubCmd::BlinkAll => {
-                    log::info!("blinking all sensors");
+                    log::info!("blinking all peripherals");
                     // spawn one task to spawn sensor-specific tasks and await them all before sending the Success resp
                     let mut sensors = self.sensors.clone();
                     tokio::spawn(async move {
@@ -364,7 +362,7 @@ pub mod peripheral {
                                 0 => [0],
                                 _ => [1],
                             };
-                            log::debug!("writing: {:?} to {:?}", led_cmd, p.addr);
+                            log::debug!("writing: {:?} to peripheral ({:?})", led_cmd, p.addr);
                             let _ = p
                                 .do_action(
                                     LED_CHARACTERISTIC_UUID,
@@ -397,7 +395,7 @@ pub mod peripheral {
                             .await
                         {
                             Ok(ActionResult::Data(res)) => {
-                                log::debug!("read sensor data: {res:?}");
+                                log::debug!("read peripheral data: {res:?}");
                                 task_tx
                                     .send(PeripheralMsg::Response(
                                         cmd.id,
@@ -412,7 +410,7 @@ pub mod peripheral {
                                     .unwrap();
                             }
                             Err(e) => {
-                                log::warn!("Failed to read sensor data: {e:?}");
+                                log::warn!("Failed to read peripheral data: {e:?}");
                                 task_tx
                                     .send(PeripheralMsg::Response(cmd.id, HubResp::Failed))
                                     .unwrap();
@@ -425,7 +423,7 @@ pub mod peripheral {
                     // no change needed
                     match self.subscribe(addr).await {
                         Err(_) => {
-                            log::warn!("Failed to subscribe to sensor data!");
+                            log::warn!("Failed to subscribe to peripheral data!");
                             self.tx
                                 .send(PeripheralMsg::Response(cmd.id, HubResp::Failed))
                                 .unwrap();
@@ -442,7 +440,7 @@ pub mod peripheral {
                     // no change needed
                     match self.unsubscribe(addr).await {
                         Err(_) => {
-                            log::warn!("Failed to unsubscribe from sensor data!");
+                            log::warn!("Failed to unsubscribe from peripheral data!");
                             self.tx
                                 .send(PeripheralMsg::Response(cmd.id, HubResp::Failed))
                                 .unwrap();
@@ -456,11 +454,11 @@ pub mod peripheral {
                 }
 
                 HubCmd::FindSensors => {
-                    log::info!("looking for sensors");
+                    log::info!("looking for peripherals");
                     // todo run in thread somehow
                     match self.find_sensors().await {
                         Err(_) => {
-                            log::warn!("Finding new Sensors failed");
+                            log::warn!("Finding new peripherals failed");
                             self.tx
                                 .send(PeripheralMsg::Response(cmd.id, HubResp::Failed))
                                 .unwrap();
@@ -474,21 +472,23 @@ pub mod peripheral {
                 }
 
                 HubCmd::Connect(addr) => {
+                    log::info!("connecting to peripheral ({addr:?})");
+
                     let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
                         Some(p) => p.clone(),
                         None => {
+                            log::warn!("peripheral ({addr:?}) not found");
                             self.tx
                                 .send(PeripheralMsg::Response(cmd.id, HubResp::Failed))
                                 .unwrap();
                             return;
                         }
                     };
-                    log::info!("connecting to peripheral ({addr:?})");
 
                     tokio::spawn(async move {
                         match p.connect().await {
                             Err(_) => {
-                                log::warn!("Failed to connect to sensor!");
+                                log::warn!("Failed to connect to peripheral!");
                                 task_tx
                                     .send(PeripheralMsg::Response(cmd.id, HubResp::Failed))
                                     .unwrap();
@@ -528,21 +528,23 @@ pub mod peripheral {
                 }
 
                 HubCmd::Disconnect(addr) => {
+                    log::info!("disonnecting from peripheral ({addr:?})");
+
                     let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
                         Some(p) => p.clone(),
                         None => {
+                            log::warn!("peripheral ({addr:?}) not found");
                             self.tx
                                 .send(PeripheralMsg::Response(cmd.id, HubResp::Failed))
                                 .unwrap();
                             return;
                         }
                     };
-                    log::info!("disonnecting from peripheral ({addr:?})");
 
                     tokio::spawn(async move {
                         match p.disconnect().await {
                             Err(_) => {
-                                log::warn!("Failed to disconnect from sensor!");
+                                log::warn!("Failed to disconnect from peripheral!");
                                 task_tx
                                     .send(PeripheralMsg::Response(cmd.id, HubResp::Failed))
                                     .unwrap();
