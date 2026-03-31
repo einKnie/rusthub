@@ -104,7 +104,7 @@ struct ConnectedSensor {
     last: u32,
     subscribed: bool,
     show: bool,
-    database: bool,
+    id: i32,
 }
 
 impl PartialEq for ConnectedSensor {
@@ -130,7 +130,7 @@ impl ConnectedSensor {
     }
 
     pub fn in_db(&self) -> bool {
-        self.database
+        self.id != 0
     }
 }
 
@@ -356,7 +356,7 @@ impl MeasureApp {
                             last: 0,
                             subscribed: false,
                             show: false,
-                            database: false,
+                            id: 0,
                         });
                         self.send_database_command(DBCmd::AddSensor(
                             u64::from(addr),
@@ -457,13 +457,15 @@ impl MeasureApp {
                 }
                 match val {
                     DBResp::SensorAdded(a) => {
-                        if let Some(p) = self
+                        if let Some(_p) = self
                             .state
                             .sensors
                             .iter_mut()
                             .find(|p| u64::from(p.addr) == a)
                         {
-                            p.database = true;
+                            // request sensor id
+                            log::debug!("Sensor was added to database-. requesting id");
+                            self.send_database_command(DBCmd::Get(DatabaseQuery::SensorID(a)));
                         }
                     }
                     DBResp::SensorKnown(a, name, id) => {
@@ -475,7 +477,7 @@ impl MeasureApp {
                         {
                             p.name.next = name;
                             p.name.update();
-                            p.database = true;
+                            p.id = id;
                         }
                     }
                     DBResp::SensorDeleted(a) => {
@@ -485,7 +487,18 @@ impl MeasureApp {
                             .iter_mut()
                             .find(|p| u64::from(p.addr) == a)
                         {
-                            p.database = false;
+                            p.id = 0;
+                        }
+                    }
+                    DBResp::SensorId(a, id) => {
+                        if let Some(p) = self
+                            .state
+                            .sensors
+                            .iter_mut()
+                            .find(|p| u64::from(p.addr) == a)
+                        {
+                            log::debug!("Got sensor Id for sensor");
+                            p.id = id;
                         }
                     }
                     DBResp::Success => (),
