@@ -1,7 +1,15 @@
+//! PeripheralMgr
+//!
+//! Facilitates handling of peripherals
+
 pub mod error;
 pub mod message;
 pub mod sensor;
 
+/// Peripheral
+///
+/// Implements the Peripheral Mgr
+/// and provides access to BT peripherals
 pub mod peripheral {
     use crate::peripheral_mgr::error::PeripheralError;
     use crate::peripheral_mgr::message::{HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg};
@@ -69,6 +77,7 @@ pub mod peripheral {
     }
 
     impl PeripheralMgr {
+        /// Generate a new PeripheralMgr
         pub fn new(
             tx: UnboundedSender<PeripheralMsg>,
             rx: UnboundedReceiver<PeripheralCmd>,

@@ -1,3 +1,6 @@
+//! Data processing and visualisation
+//!
+
 use chrono::{DateTime, Local};
 use std::cmp::Ordering;
 
@@ -7,9 +10,13 @@ use std::cmp::Ordering;
 /// and is used for charting
 #[derive(Debug, Clone)]
 pub struct DatabaseEntry {
+    /// Sensoir Id from DB
     pub sensor_id: i32,
+    /// Sensor name
     pub sensor_name: String,
+    /// Date of data added
     pub ts: DateTime<Local>,
+    /// Data value
     pub value: u32,
 }
 
@@ -51,6 +58,9 @@ impl Ord for DatabaseEntry {
     }
 }
 
+/// Charting
+///
+/// The charting module provides data visualisation
 pub mod charting {
 
     use crate::database_mgr::data::DatabaseEntry;

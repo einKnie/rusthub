@@ -1,7 +1,14 @@
+//! DatabaseMgr
+//!
+//! Facilitates database access
+
 pub mod data;
 pub mod error;
 pub mod message;
 
+/// Database
+///
+/// Module provides database access
 pub mod database {
     use crate::database_mgr::{data::*, error::DatabaseError, message::*};
 
@@ -43,6 +50,7 @@ pub mod database {
     }
 
     impl Db {
+        /// Generate new Db for database access
         pub fn new(tx: UnboundedSender<DatabaseResp>, rx: UnboundedReceiver<DatabaseCmd>) -> Self {
             Self { tx, rx, pool: None }
         }
@@ -495,6 +503,7 @@ pub mod database {
             Ok(())
         }
 
+        /// Get datapoints from database
         async fn get_datapoints(
             &mut self,
             id: i32,

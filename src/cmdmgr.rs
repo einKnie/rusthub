@@ -1,3 +1,7 @@
+//! CmdMgr
+//!
+//! Command handling with response verification and timeouts
+
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
@@ -12,10 +16,14 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// Generic Command trait
 /// for a command with an ID
 pub trait Command {
-    type A; // id
-    type B; // message
+    /// Id
+    type A;
+    /// Message
+    type B;
 
+    /// Return Id
     fn id(&self) -> Self::A;
+    /// Return message
     fn msg(&self) -> Self::B;
 }
 

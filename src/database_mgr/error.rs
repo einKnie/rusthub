@@ -1,11 +1,19 @@
+//! Error types for DatabaseMgr
+//!
+
 use std::error::Error;
 
 /// Database Error
 #[derive(Debug)]
 pub enum DatabaseError {
+    /// No connection to database
     NoConnection,
+    /// Generic failure
     Failed,
+    /// Duplicate entry
+    /// @deprecated
     Duplicate,
+    /// Generic failure with original error
     GeneralError(Box<dyn Error>),
 }
 

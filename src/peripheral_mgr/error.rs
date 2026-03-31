@@ -1,14 +1,24 @@
+//! Error types for PeripheralMgr
+//!
+
 use std::error::Error;
 
 /// Peripheral Error
 #[derive(Debug)]
 pub enum PeripheralError {
+    /// No BT adapter found
     NoAdapter,
+    /// No BT peripheral detected
     NoPeripheral,
+    /// No characteristic detected
     NoCharacteristic,
+    /// Read operation failed
     ReadFailed,
+    /// Connection to peripheral failed
     ConnectionError,
+    /// Read/Write operation failed
     IOError,
+    /// Invalid data received from peripheral
     InvalidData,
 }
 

@@ -1,3 +1,7 @@
+//! HubGui
+//!
+//! Graphical interface for periperal management
+
 use crate::cmdmgr::CmdMgr;
 use crate::database_mgr::message::{DBCmd, DBResp, DatabaseCmd, DatabaseQuery, DatabaseResp};
 use crate::database_mgr::{

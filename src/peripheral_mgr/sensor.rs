@@ -1,20 +1,33 @@
+//! Sensor abstraction
+//!
+
 use crate::peripheral_mgr::error::PeripheralError;
 
 use btleplug::api::{BDAddr, Characteristic, Peripheral as _, WriteType};
 use btleplug::platform::Peripheral;
 use uuid::Uuid;
 
+/// PeripheralAction
 #[derive(Debug)]
 pub enum PeripheralAction {
+    /// Write one byte to peripheral
     Write([u8; 1]),
+    /// Read data from peripheral
     Read,
+    /// subscribe to notifications from peripheral
     Subscribe,
+    /// unsubscribe from notifications from peripheral
     Unsubscribe,
 }
 
+/// ActionResult
+///
+/// Result for a PeripheralAction
 #[derive(Debug)]
 pub enum ActionResult {
+    /// Generic success
     Success,
+    /// Read data
     Data(u32),
 }
 
@@ -25,7 +38,9 @@ pub enum ActionResult {
 /// @todo should i remove this abstraction? i feel like this introduces more complexity than is necessary
 #[derive(Debug, Clone)]
 pub struct SensorPeripheral {
+    /// Peripheral object as returned from adapter
     pub peripheral: Peripheral,
+    /// Peripheral hw addr
     pub addr: BDAddr,
 }
 
@@ -42,6 +57,7 @@ impl PartialEq for SensorPeripheral {
 }
 
 impl SensorPeripheral {
+    /// Generate new SensorPeripheral
     pub fn new(p: Peripheral, a: BDAddr) -> Self {
         Self {
             peripheral: p,
@@ -49,13 +65,12 @@ impl SensorPeripheral {
         }
     }
 
+    /// Get peripheral address
     pub fn addr(&self) -> BDAddr {
         self.addr
     }
 
     /// Connect to peripheral
-    ///
-    /// Check first if already connected
     pub async fn connect(&mut self) -> Result<(), PeripheralError> {
         if match self.peripheral.is_connected().await {
             Ok(res) => res,
@@ -78,6 +93,7 @@ impl SensorPeripheral {
         }
     }
 
+    /// Disconnect from peripheral
     pub async fn disconnect(&mut self) -> Result<(), PeripheralError> {
         if !match self.peripheral.is_connected().await {
             Ok(res) => res,
@@ -96,6 +112,7 @@ impl SensorPeripheral {
         }
     }
 
+    /// Perform a PeripheralAction
     pub async fn do_action(
         &mut self,
         uuid: Uuid,
@@ -134,6 +151,7 @@ impl SensorPeripheral {
         }
     }
 
+    /// Read from peripheral
     pub async fn read(&self, char: Characteristic) -> Result<u32, PeripheralError> {
         match self.peripheral.read(&char).await {
             Ok(res) => {
@@ -149,6 +167,7 @@ impl SensorPeripheral {
         }
     }
 
+    /// Write to peripheral
     pub async fn write(&self, char: Characteristic, data: [u8; 1]) -> Result<(), PeripheralError> {
         match self
             .peripheral
@@ -160,6 +179,7 @@ impl SensorPeripheral {
         }
     }
 
+    /// Subscribe to notifications from peripheral
     pub async fn subscribe(&self, char: Characteristic) -> Result<(), PeripheralError> {
         match self.peripheral.subscribe(&char).await {
             Ok(_) => Ok(()),
@@ -167,6 +187,7 @@ impl SensorPeripheral {
         }
     }
 
+    /// Unsubscribe from notifications from peripheral
     pub async fn unsubscribe(&self, char: Characteristic) -> Result<(), PeripheralError> {
         match self.peripheral.unsubscribe(&char).await {
             Ok(_) => Ok(()),

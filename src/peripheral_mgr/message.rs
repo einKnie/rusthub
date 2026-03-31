@@ -1,3 +1,6 @@
+//! Message types for PeripheralMgr
+//!
+
 use crate::cmdmgr::Command;
 use btleplug::api::BDAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -7,8 +10,11 @@ use std::sync::atomic::{AtomicU16, Ordering};
 /// Sent from PeripheralMgr in Response to a PeripheralCmd
 #[derive(Debug, Clone)]
 pub enum HubResp {
+    /// Contains data received from peripheral
     ReadData(BDAddr, u32),
+    /// Generic success
     Success,
+    /// Generic failure
     Failed,
 }
 
@@ -17,15 +23,24 @@ pub enum HubResp {
 /// Sent from PeripheralMgr on bluetooth event
 #[derive(Debug, Clone)]
 pub enum HubEvent {
+    /// BT device was discovered
     DeviceDiscovered(BDAddr),
+    /// BT device was connected
     DeviceConnected(BDAddr),
+    /// BT device was disconnected
     DeviceDisconnected(BDAddr),
+    /// BT device sent new data
     NewData(BDAddr, u32),
 }
 
+/// PeripheralMsg
+///
+/// Container for Event and Response msgs
 #[derive(Debug, Clone)]
 pub enum PeripheralMsg {
+    /// Event message (async)
     Event(HubEvent),
+    /// Response message (in response to command)
     Response(u16, HubResp),
 }
 
@@ -38,26 +53,43 @@ pub enum PeripheralMsg {
 /// @todo find out how i can check for two types in one stream (box? trait? can en enum impl a trait, even?)
 #[derive(Debug, Clone, Copy)]
 pub enum HubCmd {
+    /// Ping
     Ping,
+    /// Check for new sensors
     FindSensors,
+    /// Connect to sensor with addr
     Connect(BDAddr),
+    /// Connect to all known sensors
     ConnectAll,
+    /// Disconnect from sensor with addr
     Disconnect(BDAddr),
+    /// Subscribe to receive data from sensor with addr
     Subscribe(BDAddr),
+    /// Unsubscribe from data from sensor with addr
     Unsubscribe(BDAddr),
+    /// Read data from sensor with addr
     ReadFrom(BDAddr),
+    /// Blink sensor with addr
     Blink(BDAddr),
+    /// Blink all connected sensors
     BlinkAll,
+    /// stop the PeripheralMgr thread
     StopThread,
 }
 
+/// PeripheralCmd
+///
+/// Represents a command with command id
 #[derive(Debug, Clone)]
 pub struct PeripheralCmd {
+    /// command id
     pub id: u16,
+    /// command
     pub msg: HubCmd,
 }
 
 impl PeripheralCmd {
+    /// Generate new PeripheralCmd from HubCmd
     pub fn new(msg: HubCmd) -> PeripheralCmd {
         static CNT: AtomicU16 = AtomicU16::new(1); // we start at 1 to keep 0 for eventmsg (but: what about rollover?)
 
@@ -67,6 +99,7 @@ impl PeripheralCmd {
         }
     }
 
+    /// Validate a response
     pub fn validate_response(&self, resp: &HubResp) -> bool {
         // check if HubResp is valid depending on HubCmd
         match (self.msg, resp) {
