@@ -29,6 +29,7 @@ pub mod peripheral {
 
     /// Specific Characteristic UUID set by Sensor Peripheral
     /// for controlling the sensor LED
+    const MOISTURE_SENSOR_SERVICE_UUID: Uuid = uuid!("d9feb5df-b55f-44ef-b307-63893c5f67e4");
     const LED_CHARACTERISTIC_UUID: Uuid = uuid!("d9feb5df-b55f-44ef-b307-63893c5f67e5");
     const SENSOR_CHARACTERISTIC_UUID: Uuid = uuid!("d9feb5df-b55f-44ef-b307-63893c5f67e6");
 
@@ -124,14 +125,13 @@ pub mod peripheral {
             let prevlen = self.sensors.len();
 
             for p in self.central.as_ref().unwrap().peripherals().await.unwrap() {
-                if p.properties()
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .local_name
-                    .iter()
-                    .any(|name| name.contains("MoistureSensor"))
-                {
+                // detect sensors via the sensor characteristic
+                let services = match p.properties().await {
+                    Ok(Some(s)) => s.services,
+                    Ok(None) => Vec::new(),
+                    Err(_) => Vec::new(),
+                };
+                if services.contains(&MOISTURE_SENSOR_SERVICE_UUID) {
                     let addr = p.properties().await.unwrap().unwrap().address;
 
                     if self.sensors.iter().any(|p| p.addr == addr) {
@@ -607,16 +607,17 @@ pub mod peripheral {
                                         continue;
                                     }
                                 };
-                                let properties = peripheral.properties().await.unwrap();
-                                let addr = properties.as_ref().unwrap().address;
-
-                                let name = properties
-                                    .and_then(|p| p.local_name)
+                                let properties = peripheral.properties().await.unwrap().unwrap();
+                                let addr = properties.address;
+                                let name = properties.local_name
                                     .map(|local_name| local_name.to_string())
                                     .unwrap_or_default();
+                                let services = properties.services;
+
                                 // we only care about our sensor here
-                                if name.contains("MoistureSensor") {
-                                    log::info!("DeviceDiscovered: {:?} {}", addr, name);
+                                if services.contains(&MOISTURE_SENSOR_SERVICE_UUID)
+                                {
+                                    log::info!("DeviceDiscovered: {:?} {} {}", addr, name, id);
 
                                     // add new sensor to list and inform hub
                                     self.sensors.push(SensorPeripheral::new(peripheral, addr));
