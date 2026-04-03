@@ -4,7 +4,7 @@
 use crate::peripheral_mgr::error::PeripheralError;
 
 use btleplug::api::{BDAddr, Characteristic, Peripheral as _, WriteType};
-use btleplug::platform::Peripheral;
+use btleplug::platform::{Peripheral, PeripheralId};
 use uuid::Uuid;
 
 /// PeripheralAction
@@ -40,34 +40,34 @@ pub enum ActionResult {
 pub struct SensorPeripheral {
     /// Peripheral object as returned from adapter
     pub peripheral: Peripheral,
-    /// Peripheral hw addr
-    pub addr: BDAddr,
 }
 
 impl std::fmt::Display for SensorPeripheral {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Sensor Peripheral ({:?})", self.addr)
+        write!(f, "Sensor Peripheral ({:?})", self.peripheral.address())
     }
 }
 
 impl PartialEq for SensorPeripheral {
     fn eq(&self, other: &Self) -> bool {
-        self.addr == other.addr
+        self.peripheral.address() == other.peripheral.address()
     }
 }
 
 impl SensorPeripheral {
     /// Generate new SensorPeripheral
-    pub fn new(p: Peripheral, a: BDAddr) -> Self {
-        Self {
-            peripheral: p,
-            addr: a,
-        }
+    pub fn new(p: Peripheral) -> Self {
+        Self { peripheral: p }
+    }
+
+    /// Get peripheral id
+    pub fn id(&self) -> PeripheralId {
+        self.peripheral.id()
     }
 
     /// Get peripheral address
     pub fn addr(&self) -> BDAddr {
-        self.addr
+        self.peripheral.address()
     }
 
     /// Connect to peripheral

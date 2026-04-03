@@ -133,13 +133,15 @@ pub mod peripheral {
                 };
                 if services.contains(&MOISTURE_SENSOR_SERVICE_UUID) {
                     let addr = p.properties().await.unwrap().unwrap().address;
+                    let id = p.id();
 
-                    if self.sensors.iter().any(|p| p.addr == addr) {
+                    if self.sensors.iter().any(|p| p.addr() == addr) {
+                        // already known
                         continue;
                     }
 
-                    log::debug!("found new sensor device! ({addr:?})");
-                    self.sensors.push(SensorPeripheral::new(p, addr));
+                    log::debug!("found new sensor device! ({addr:?}) {id}");
+                    self.sensors.push(SensorPeripheral::new(p));
                     self.tx
                         .send(PeripheralMsg::Event(HubEvent::DeviceDiscovered(addr)))
                         .unwrap();
@@ -168,7 +170,7 @@ pub mod peripheral {
         async fn subscribe(&mut self, addr: BDAddr) -> Result<(), PeripheralError> {
             let mut sensors = self.sensors.clone();
 
-            let p = match sensors.iter_mut().find(|p| p.addr == addr) {
+            let p = match sensors.iter_mut().find(|p| p.addr() == addr) {
                 Some(p) => p,
                 None => {
                     return Err(PeripheralError::NoPeripheral);
@@ -208,7 +210,7 @@ pub mod peripheral {
         async fn unsubscribe(&mut self, addr: BDAddr) -> Result<(), PeripheralError> {
             let mut sensors = self.sensors.clone();
 
-            let p = match sensors.iter_mut().find(|p| p.addr == addr) {
+            let p = match sensors.iter_mut().find(|p| p.addr() == addr) {
                 Some(p) => p,
                 None => {
                     return Err(PeripheralError::NoPeripheral);
@@ -252,7 +254,7 @@ pub mod peripheral {
             tx: UnboundedSender<PeripheralMsg>,
             mut rx: UnboundedReceiver<PeripheralCmd>,
         ) -> u32 {
-            log::debug!("Hello from notification thread for [{0}]", p.addr);
+            log::debug!("Hello from notification thread for [{0}]", p.addr());
 
             let mut stream = match p.peripheral.notifications().await {
                 Ok(s) => s,
@@ -275,7 +277,7 @@ pub mod peripheral {
                                 continue;
                             }
                         };
-                        tx.send(PeripheralMsg::Event(HubEvent::NewData(p.addr, d))).unwrap();
+                        tx.send(PeripheralMsg::Event(HubEvent::NewData(p.addr(), d))).unwrap();
                     },
                     Some(PeripheralCmd{id: _ , msg: HubCmd::StopThread}) = rx.recv() => {
                         log::info!("received stop command from main");
@@ -284,7 +286,7 @@ pub mod peripheral {
                 }
             }
 
-            log::debug!("Leaving notification thread for [{0}]", p.addr);
+            log::debug!("Leaving notification thread for [{0}]", p.addr());
             0
         }
 
@@ -325,7 +327,7 @@ pub mod peripheral {
                                             0 => [0],
                                             _ => [1],
                                         };
-                                        log::debug!("writing: {:?} to {:?}", led_cmd, p.addr);
+                                        log::debug!("writing: {:?} to {:?}", led_cmd, p.addr());
                                         let _ = p
                                             .do_action(
                                                 LED_CHARACTERISTIC_UUID,
@@ -346,7 +348,7 @@ pub mod peripheral {
 
                 HubCmd::Blink(addr) => {
                     log::info!("blinking led on peripheral ({addr:?})");
-                    let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
+                    let mut p = match self.sensors.iter().find(|&p| p.addr() == addr) {
                         Some(p) => p.clone(),
                         None => {
                             task_tx
@@ -362,7 +364,7 @@ pub mod peripheral {
                                 0 => [0],
                                 _ => [1],
                             };
-                            log::debug!("writing: {:?} to peripheral ({:?})", led_cmd, p.addr);
+                            log::debug!("writing: {:?} to peripheral ({:?})", led_cmd, p.addr());
                             let _ = p
                                 .do_action(
                                     LED_CHARACTERISTIC_UUID,
@@ -379,7 +381,7 @@ pub mod peripheral {
 
                 HubCmd::ReadFrom(addr) => {
                     log::info!("Reading from peripheral ({addr:?})");
-                    let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
+                    let mut p = match self.sensors.iter().find(|&p| p.addr() == addr) {
                         Some(p) => p.clone(),
                         None => {
                             self.tx
@@ -474,7 +476,7 @@ pub mod peripheral {
                 HubCmd::Connect(addr) => {
                     log::info!("connecting to peripheral ({addr:?})");
 
-                    let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
+                    let mut p = match self.sensors.iter().find(|&p| p.addr() == addr) {
                         Some(p) => p.clone(),
                         None => {
                             log::warn!("peripheral ({addr:?}) not found");
@@ -530,7 +532,7 @@ pub mod peripheral {
                 HubCmd::Disconnect(addr) => {
                     log::info!("disonnecting from peripheral ({addr:?})");
 
-                    let mut p = match self.sensors.iter().find(|&p| p.addr == addr) {
+                    let mut p = match self.sensors.iter().find(|&p| p.addr() == addr) {
                         Some(p) => p.clone(),
                         None => {
                             log::warn!("peripheral ({addr:?}) not found");
@@ -620,7 +622,7 @@ pub mod peripheral {
                                     log::info!("DeviceDiscovered: {:?} {} {}", addr, name, id);
 
                                     // add new sensor to list and inform hub
-                                    self.sensors.push(SensorPeripheral::new(peripheral, addr));
+                                    self.sensors.push(SensorPeripheral::new(peripheral));
                                     self.tx.send(PeripheralMsg::Event(HubEvent::DeviceDiscovered(addr))).unwrap();
                                 }
                             },
@@ -632,7 +634,7 @@ pub mod peripheral {
                                 let properties = peripheral.properties().await.unwrap();
                                 let addr = properties.as_ref().unwrap().address;
 
-                                if self.sensors.iter().any(|p| p.addr == addr) {
+                                if self.sensors.iter().any(|p| p.addr() == addr) {
                                     log::info!("DeviceConnected: {:?}", addr);
                                     self.tx.send(PeripheralMsg::Event(HubEvent::DeviceConnected(addr))).unwrap();
                                 }
@@ -644,7 +646,7 @@ pub mod peripheral {
 
                                 // check if the disconnected device is known to us
                                 // peripheral name is not consistently available here, so let's compare address
-                                if self.sensors.iter().any(|p| p.addr == addr) {
+                                if self.sensors.iter().any(|p| p.addr() == addr) {
                                     log::info!("DeviceDisconnected: {:?}", addr);
                                     self.tx.send(PeripheralMsg::Event(HubEvent::DeviceDisconnected(addr))).unwrap();
                                 }
@@ -693,7 +695,7 @@ pub mod peripheral {
             log::debug!("* disconnecting all sensors");
             for mut p in self.sensors.clone() {
                 if p.disconnect().await.is_err() {
-                    log::warn!("Disconnect failed ({0})", p.addr);
+                    log::warn!("Disconnect failed ({0})", p.addr());
                 }
             }
 
