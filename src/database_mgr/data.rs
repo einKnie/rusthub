@@ -162,10 +162,29 @@ pub mod charting {
         let chunk_n = chunks.len();
 
         for (idx, chunk) in chunks.into_iter().enumerate() {
+            let chart_title = match title {
+                "" => {
+                    let start = chunk.iter().min().unwrap().ts;
+                    let end = chunk.iter().max().unwrap().ts;
+                    let name = chunk.iter().min().unwrap().sensor_name.clone();
+
+                    if chunk.len() < 2 {
+                        format!("{name}  {}", start.format("%v %r"))
+                    } else {
+                        format!(
+                            "{name}  {} - {}",
+                            start.format("%v %r"),
+                            end.format("%v %r")
+                        )
+                    }
+                }
+                title => String::from(title),
+            };
             let chart_no = format!("{}", idx);
+
             draw_single_svg_chart(
                 if chunk_n > 1 { chart_no.as_str() } else { "" },
-                title,
+                chart_title.as_str(),
                 chunk,
             );
         }
@@ -204,7 +223,7 @@ pub mod charting {
         };
 
         let mut chart = ChartBuilder::on(&root)
-            .caption(title, ("sans-serif", 50.0))
+            .caption(title, ("sans-serif", 20.0))
             .x_label_area_size(35)
             .y_label_area_size(40)
             .build_cartesian_2d(x_range, y_range)
