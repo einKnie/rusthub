@@ -1,193 +1,70 @@
 //! Sensor abstraction
 //!
+//! The plan is to use this to allow PeripheralMgr to handle arbitrary sensor peripherals
+//!
+//! For a Sensor to be managed, it has to implement at least
+//! * SensorService, for discovery
+//! * Sensor, for interaction with the bluetooth peripheral
+//!
+//! A full default implementation for Sensor exists for bluetooth sensors
+//! in sensor_ble
 
-use crate::peripheral_mgr::error::PeripheralError;
+pub mod ble;
+pub mod platform;
 
-use btleplug::api::{BDAddr, Characteristic, Peripheral as _, WriteType};
-use btleplug::platform::{Peripheral, PeripheralId};
-use uuid::Uuid;
+use super::error::PeripheralError;
 
-/// PeripheralAction
-#[derive(Debug)]
-pub enum PeripheralAction {
-    /// Write one byte to peripheral
-    Write([u8; 1]),
-    /// Read data from peripheral
-    Read,
-    /// subscribe to notifications from peripheral
-    Subscribe,
-    /// unsubscribe from notifications from peripheral
-    Unsubscribe,
-}
-
-/// ActionResult
+/// SensorService
 ///
-/// Result for a PeripheralAction
-#[derive(Debug)]
-pub enum ActionResult {
-    /// Generic success
-    Success,
-    /// Read data
-    Data(u32),
+/// Generic Sensor service identification
+/// must be implemented for specific protocol with any datatype T as needed
+pub trait SensorService<T> {
+    /// Return id for the service provided by the sensor
+    ///
+    /// this is used for sensor identification in PeripheralMgr
+    fn service_id() -> T;
+
+    /// Return id for the service provided from which data can be read
+    fn read_id() -> T;
+
+    /// Return id for the service to which data can be written
+    fn write_id() -> T;
 }
 
-/// Sensor Peripheral
+/// HasPeripheral
+pub trait HasPeripheral<T> {
+    /// Return a new type which implements HasPeripheral
+    fn new_with_peripheral(t: T) -> Self;
+    /// Return blutooth Peripheral
+    fn peripheral(&self) -> T;
+}
+
+/// Sensor
 ///
-/// Individual Sensor Peripheral device
-/// Represents one Sensor Peripheral
-/// @todo should i remove this abstraction? i feel like this introduces more complexity than is necessary
-#[derive(Debug, Clone)]
-pub struct SensorPeripheral {
-    /// Peripheral object as returned from adapter
-    pub peripheral: Peripheral,
-}
+/// Generic Sensor Peripheral trait
+/// Provides functions that all connections to sensors should provide
+/// the implementation is protocol specific
+pub trait Sensor: Sync + Send + 'static {
+    /// Connect to device
+    fn connect(&mut self) -> impl std::future::Future<Output = Result<(), PeripheralError>> + Send;
 
-impl std::fmt::Display for SensorPeripheral {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Sensor Peripheral ({:?})", self.peripheral.address())
-    }
-}
-
-impl PartialEq for SensorPeripheral {
-    fn eq(&self, other: &Self) -> bool {
-        self.peripheral.address() == other.peripheral.address()
-    }
-}
-
-impl SensorPeripheral {
-    /// Generate new SensorPeripheral
-    pub fn new(p: Peripheral) -> Self {
-        Self { peripheral: p }
-    }
-
-    /// Get peripheral id
-    pub fn id(&self) -> PeripheralId {
-        self.peripheral.id()
-    }
-
-    /// Get peripheral address
-    pub fn addr(&self) -> BDAddr {
-        self.peripheral.address()
-    }
-
-    /// Connect to peripheral
-    pub async fn connect(&mut self) -> Result<(), PeripheralError> {
-        if match self.peripheral.is_connected().await {
-            Ok(res) => res,
-            Err(e) => {
-                log::debug!("Cannot determine peripheral connection status: {e:?}");
-                return Err(PeripheralError::ConnectionError);
-            }
-        } {
-            log::debug!("already connected!");
-            return Ok(());
-        }
-
-        match self.peripheral.connect().await {
-            Ok(_) => Ok(()),
-            Err(_) => Err(PeripheralError::ConnectionError),
-        }
-    }
-
-    /// Disconnect from peripheral
-    pub async fn disconnect(&mut self) -> Result<(), PeripheralError> {
-        if !match self.peripheral.is_connected().await {
-            Ok(res) => res,
-            Err(e) => {
-                log::debug!("Cannot determine peripheral connection status: {e:?}");
-                return Err(PeripheralError::ConnectionError);
-            }
-        } {
-            log::debug!("already disconnected!");
-            return Ok(());
-        }
-
-        match self.peripheral.disconnect().await {
-            Ok(_) => Ok(()),
-            Err(_) => Err(PeripheralError::ConnectionError),
-        }
-    }
-
-    /// Perform a PeripheralAction
-    pub async fn do_action(
+    /// Disconnect from device
+    fn disconnect(
         &mut self,
-        uuid: Uuid,
-        action: PeripheralAction,
-    ) -> Result<ActionResult, PeripheralError> {
-        // discover services and characteristics
-        let _ = self.peripheral.discover_services().await;
+    ) -> impl std::future::Future<Output = Result<(), PeripheralError>> + Send;
 
-        let ch = match self
-            .peripheral
-            .characteristics()
-            .iter()
-            .find(|c| c.uuid == uuid)
-        {
-            None => return Err(PeripheralError::NoCharacteristic),
-            Some(char) => char.clone(),
-        };
+    /// Subscribe to data from device
+    fn subscribe(&self) -> impl std::future::Future<Output = Result<(), PeripheralError>> + Send;
 
-        match action {
-            PeripheralAction::Write(data) => match self.write(ch, data).await {
-                Ok(_) => Ok(ActionResult::Success),
-                Err(e) => Err(e),
-            },
-            PeripheralAction::Read => match self.read(ch).await {
-                Ok(val) => Ok(ActionResult::Data(val)),
-                Err(e) => Err(e),
-            },
-            PeripheralAction::Subscribe => match self.subscribe(ch).await {
-                Ok(_) => Ok(ActionResult::Success),
-                Err(e) => Err(e),
-            },
-            PeripheralAction::Unsubscribe => match self.unsubscribe(ch).await {
-                Ok(_) => Ok(ActionResult::Success),
-                Err(e) => Err(e),
-            },
-        }
-    }
+    /// Unsubscribe from data from device
+    fn unsubscribe(&self) -> impl std::future::Future<Output = Result<(), PeripheralError>> + Send;
 
-    /// Read from peripheral
-    pub async fn read(&self, char: Characteristic) -> Result<u32, PeripheralError> {
-        match self.peripheral.read(&char).await {
-            Ok(res) => {
-                let d = match <[u8; 4]>::try_from(&res[..4]) {
-                    Ok(arr) => arr,
-                    Err(_) => {
-                        return Err(PeripheralError::ReadFailed);
-                    }
-                };
-                Ok(u32::from_le_bytes(d))
-            }
-            Err(_) => Err(PeripheralError::IOError),
-        }
-    }
+    /// Write one byte of data to device
+    fn write(
+        &self,
+        data: [u8; 1],
+    ) -> impl std::future::Future<Output = Result<(), PeripheralError>> + Send;
 
-    /// Write to peripheral
-    pub async fn write(&self, char: Characteristic, data: [u8; 1]) -> Result<(), PeripheralError> {
-        match self
-            .peripheral
-            .write(&char, &data, WriteType::WithResponse)
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(_) => Err(PeripheralError::IOError),
-        }
-    }
-
-    /// Subscribe to notifications from peripheral
-    pub async fn subscribe(&self, char: Characteristic) -> Result<(), PeripheralError> {
-        match self.peripheral.subscribe(&char).await {
-            Ok(_) => Ok(()),
-            Err(_) => Err(PeripheralError::IOError),
-        }
-    }
-
-    /// Unsubscribe from notifications from peripheral
-    pub async fn unsubscribe(&self, char: Characteristic) -> Result<(), PeripheralError> {
-        match self.peripheral.unsubscribe(&char).await {
-            Ok(_) => Ok(()),
-            Err(_) => Err(PeripheralError::IOError),
-        }
-    }
+    /// Read data from device
+    fn read(&self) -> impl std::future::Future<Output = Result<Vec<u8>, PeripheralError>> + Send;
 }

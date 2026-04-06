@@ -8,8 +8,9 @@ use crate::database_mgr::{
     database,
     message::{DBCmd, DBResp, DatabaseCmd, DatabaseQuery, DatabaseResp},
 };
+use crate::peripheral_mgr;
 use crate::peripheral_mgr::message::{HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg};
-use crate::peripheral_mgr::peripheral;
+
 use btleplug::api::BDAddr;
 use chrono::Local;
 use eframe::egui::global_theme_preference_switch;
@@ -23,7 +24,7 @@ pub async fn run_gui() -> u32 {
     // start peripheral manager
     let (periph_tx, thread_periph_rx) = unbounded_channel();
     let (thread_periph_tx, periph_rx) = unbounded_channel();
-    let mgr_handle = tokio::spawn(peripheral::mgr_run(thread_periph_tx, thread_periph_rx));
+    let mgr_handle = tokio::spawn(peripheral_mgr::mgr_run(thread_periph_tx, thread_periph_rx));
 
     // spawn database manager
     let (db_tx, thread_db_rx) = unbounded_channel();

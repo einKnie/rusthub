@@ -4,7 +4,7 @@
 use std::error::Error;
 
 /// Peripheral Error
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PeripheralError {
     /// No BT adapter found
     NoAdapter,
@@ -12,14 +12,12 @@ pub enum PeripheralError {
     NoPeripheral,
     /// No characteristic detected
     NoCharacteristic,
-    /// Read operation failed
-    ReadFailed,
     /// Connection to peripheral failed
     ConnectionError,
     /// Read/Write operation failed
     IOError,
-    /// Invalid data received from peripheral
-    InvalidData,
+    /// Invalid/unexpected data read from sensor
+    InvalidData(Vec<u8>),
 }
 
 impl std::fmt::Display for PeripheralError {
@@ -30,10 +28,9 @@ impl std::fmt::Display for PeripheralError {
             PeripheralError::NoCharacteristic => {
                 write!(f, "BLE Characteristic not found on sensor device")
             }
-            PeripheralError::ReadFailed => write!(f, "Read failed"),
             PeripheralError::IOError => write!(f, "Read/Write error"),
             PeripheralError::ConnectionError => write!(f, "Connection error"),
-            PeripheralError::InvalidData => write!(f, "Unexpected or invalid data"),
+            PeripheralError::InvalidData(d) => write!(f, "Invalid data received: {d:?}"),
         }
     }
 }
