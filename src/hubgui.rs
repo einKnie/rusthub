@@ -3,15 +3,15 @@
 //! Graphical interface for periperal management
 
 use crate::cmdmgr::CmdMgr;
-use crate::database_mgr::message::{DBCmd, DBResp, DatabaseCmd, DatabaseQuery, DatabaseResp};
 use crate::database_mgr::{
-    data::{DatabaseEntry, charting},
+    data::charting,
     database,
+    message::{DBCmd, DBResp, DatabaseCmd, DatabaseQuery, DatabaseResp},
 };
 use crate::peripheral_mgr::message::{HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg};
 use crate::peripheral_mgr::peripheral;
 use btleplug::api::BDAddr;
-use chrono::{Local, TimeDelta};
+use chrono::Local;
 use eframe::egui::global_theme_preference_switch;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -32,7 +32,10 @@ pub async fn run_gui() -> u32 {
 
     // eframe options
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([320.0, 240.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([600.0, 460.0])
+            .with_resizable(true)
+            .with_app_id("RustMeasureHub"),
         ..Default::default()
     };
     if eframe::run_native(
@@ -608,6 +611,7 @@ impl eframe::App for MeasureApp {
         // run message handling
         if self.run() < 0 {
             // show info dialog, then exit
+            // tbh, i think this only works b/c run() fails every time after the first one
             egui::containers::Modal::new(egui::Id::new("modal dialog")).show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.label("A thread has run into an issue.\nPlease check your Bluetooth adapter and database server and restart the program.");
@@ -621,44 +625,20 @@ impl eframe::App for MeasureApp {
             });
         }
 
-        egui::SidePanel::left("left panel").show(ctx, |ui| {
+        egui::TopBottomPanel::bottom("bottom panel").show(ctx, |ui| {
             // general interface (independent from connected sensors)
-            // TODO: use symbols here to make this more compact
-            // TODO use this space for testing
-            // i'd like to have the sensor list here and select which sensor to manage in the central panel (or something like that)
-            ui.vertical(|ui| {
-                global_theme_preference_switch(ui);
-
-                if !self.state.sensors.is_empty() {
-                    // Sensors label
-                    ui.horizontal(|ui| {
-                        ui.label("Sensors");
-                        ui.add(egui::Separator::default().horizontal());
-                    });
-
-                    let mut sensors = self.state.sensors.clone();
-
-                    // one button for each connected sensor
-                    // TODO: test with more than one; when more than one selected, display next to each other like in a dashboard
-                    for s in sensors.iter_mut() {
-                        if ui
-                            .toggle_value(&mut s.show, format!("{0} ({1})", s.name.value, s.last))
-                            .clicked()
-                        {
-                            // works, the value is toggled automatically
-                            log::debug!("sensor {0} clicked", s.name());
-                            s.name.reset();
-                        }
-                    }
-                    // update sensors
-                    self.state.sensors = sensors.clone();
+            ui.horizontal(|ui| {
+                if ui.button("Ping").clicked() {
+                    self.ping();
                 }
 
-                // General label
-                ui.horizontal(|ui| {
-                    ui.label("General");
-                    ui.add(egui::Separator::default().horizontal());
-                });
+                if ui.button("Ping DB").clicked() {
+                    self.ping_db();
+                }
+
+                if ui.button("Blink all").clicked() {
+                    self.blink_all();
+                }
 
                 if ui.button("Disconnect all").clicked() {
                     self.disconnect_all();
@@ -669,6 +649,82 @@ impl eframe::App for MeasureApp {
                     log::info!("Closing app. Byebye!");
                     self.cleanup_and_exit(ctx.clone());
                 }
+
+                // show spinner while action in progress
+                if self.any_pending(UiAction::Peripheral(PeripheralAction::Any)) {
+                    let label = if self.any_pending(UiAction::Peripheral(PeripheralAction::Connect))
+                    {
+                        String::from("Connecting")
+                    } else if self.any_pending(UiAction::Peripheral(PeripheralAction::Search)) {
+                        String::from("Searching")
+                    } else {
+                        String::new()
+                    };
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Spinner::new());
+                        ui.label(label);
+                    });
+                }
+            });
+        });
+
+        egui::SidePanel::left("left panel").show(ctx, |ui| {
+            // general interface (independent from connected sensors)
+            // TODO: use symbols here to make this more compact
+            // TODO use this space for testing
+            // i'd like to have the sensor list here and select which sensor to manage in the central panel (or something like that)
+            ui.vertical(|ui| {
+                global_theme_preference_switch(ui);
+
+                // Sensors sidebar
+                let mut sensors = self.state.sensors.clone();
+                let any_selected = { sensors.iter().any(|s| s.show) };
+
+                egui::CollapsingHeader::new(format!("Sensors ({})", sensors.len()))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if ui
+                            .add_enabled(any_selected, egui::Button::new("Deselect all"))
+                            .clicked()
+                        {
+                            // deselect all sensors
+                            for s in sensors.iter_mut() {
+                                s.show = false;
+                            }
+                        }
+                        // one button for each connected sensor
+                        for s in sensors.iter_mut() {
+                            if ui
+                                .toggle_value(
+                                    &mut s.show,
+                                    format!("{0} ({1})", s.name.value, s.last),
+                                )
+                                .clicked()
+                            {
+                                // on sensor hide, reset any not-applied name change
+                                log::debug!("sensor {0} clicked", s.name());
+                                s.name.reset();
+                            }
+                        }
+                        // update sensors
+                        self.state.sensors = sensors.clone();
+                    });
+
+                // General sidebar
+                egui::CollapsingHeader::new("General")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        // disconnect all sensors
+                        if ui.button("Disconnect all").clicked() {
+                            self.disconnect_all();
+                        }
+
+                        // exit
+                        if ui.button("Close App").clicked() {
+                            log::info!("Closing app. Byebye!");
+                            self.cleanup_and_exit(ctx.clone());
+                        }
+                    });
             });
         });
 
@@ -790,47 +846,6 @@ impl eframe::App for MeasureApp {
 
                 // update sensors (in case smth was changed)
                 self.state.sensors = sensors.clone();
-            });
-
-            // general interface (independent from connected sensors)
-            ui.horizontal(|ui| {
-                if ui.button("Ping").clicked() {
-                    self.ping();
-                }
-
-                if ui.button("Ping DB").clicked() {
-                    self.ping_db();
-                }
-
-                if ui.button("Blink all").clicked() {
-                    self.blink_all();
-                }
-
-                if ui.button("Disconnect all").clicked() {
-                    self.disconnect_all();
-                }
-
-                // exit
-                if ui.button("Close App").clicked() {
-                    log::info!("Closing app. Byebye!");
-                    self.cleanup_and_exit(ctx.clone());
-                }
-
-                // show spinner while action in progress
-                if self.any_pending(UiAction::Peripheral(PeripheralAction::Any)) {
-                    let label = if self.any_pending(UiAction::Peripheral(PeripheralAction::Connect))
-                    {
-                        String::from("Connecting")
-                    } else if self.any_pending(UiAction::Peripheral(PeripheralAction::Search)) {
-                        String::from("Searching")
-                    } else {
-                        String::new()
-                    };
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new());
-                        ui.label(label);
-                    });
-                }
             });
 
             // yes, this updates the ui all the time, but this (no na) also causes cpu usage to go up
