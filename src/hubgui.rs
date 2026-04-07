@@ -11,10 +11,10 @@ use crate::database_mgr::{
 use crate::peripheral_mgr::message::{HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg};
 use crate::peripheral_mgr::peripheral;
 use btleplug::api::BDAddr;
+use chrono::{Local, TimeDelta};
+use eframe::egui::global_theme_preference_switch;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-
-use eframe::egui::global_theme_preference_switch;
 
 /// Run the measurent GUI
 ///
@@ -313,6 +313,10 @@ impl MeasureApp {
         self.send_peripheral_command(HubCmd::ConnectAll);
     }
 
+    fn get_data(&mut self, id: i32) {
+        self.send_database_command(DBCmd::Get(DatabaseQuery::TsBefore(id, Local::now())));
+    }
+
     fn cleanup_and_exit(&mut self, ctx: egui::Context) {
         // tell PeripheralMgr to stop
         self.send_peripheral_command(HubCmd::StopThread);
@@ -507,7 +511,13 @@ impl MeasureApp {
                     }
                     DBResp::Success => (),
                     DBResp::Failed => (),
-                    DBResp::Data(_vec) => (),
+                    DBResp::Data(vec) => {
+                        log::debug!("received data!");
+                        // just for testing: draw received data
+                        // todo: find out how i can directly display in gui popup
+                        dbg!(&vec);
+                        charting::draw_chart("", vec);
+                    }
                 }
             }
 
