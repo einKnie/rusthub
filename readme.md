@@ -66,12 +66,12 @@ how? see: https://wiki.archlinux.org/title/MariaDB
         - database might be better after all
             - have all data in database (nothing in memory, maybe even?)
                 and load data when it is needed (e.g. for displaying statistics)
-- [ ] database
+- [x] database
     - [ ] impl database storage and loading in own module
         - access data via hwaddr (unique key)
         - on connection: check if addr in db and load stored name
         - on disconnect: save current name in db for addr (or on name change, tbd)
-    - [ ] use THIS: https://lib.rs/crates/sqlx
+    - [x] use THIS: https://lib.rs/crates/sqlx
         - also to read: https://kerkour.com/rust-postgres-everything
 
 
@@ -89,17 +89,22 @@ how? see: https://wiki.archlinux.org/title/MariaDB
 - [ ] can i do a running statusbar?
 - [x] let user change sensor name
 - [ ] PERSISTENCE (remember known sensors)
+    - on startup, check for sensors in db
+        - if found, maybe also add a sensor entry but show as disconnected (until it is)
+            - would be nice long-term, to e.g. be able to remove broken/missing sensors from db
+            - also nice to see if any known sensors are offline
 - [x] add command timeouts: if a command is not resolved after x amount of time, remove from pending list
-- [ ] maybe add some sort of guistate in an Ary<Mutex> so i could e.g. have a popup when a command failed or timed out (but since the gui is immediate, i need some sort of flag (command_failed -> if true, show popup, when popup Ok button clicked -> set command_failed=false, something like that))
-- [ ] on startup, check for sensors in db
-    - if found, maybe also add a sensor entry but show as disconnected (until it is)
-        - would be nice long-term, to e.g. be able to remove broken/missing sensors from db
-        - also nice to see if any known sensors are offline
+- [ ] maybe add some sort of guistate in an Arc<Mutex> so i could e.g. have a popup when a command failed or timed out (but since the gui is immediate, i need some sort of flag (command_failed -> if true, show popup, when popup Ok button clicked -> set command_failed=false, something like that))
+
 - [x] make sensor view scrollable
     - if windows size changes (btw super tiny in floating, find a way to change that)
     - or if many active sensors
-- [ ] add button to unselect all sensors
+- [x] add button to unselect all sensors
     - always show but make unclickable when none are selected
+- [ ] display charts in gui
+    - looks to be more complex that i thought
+    - i want to display a generated chart in a window, and the window should stay open until closed
+    - ideally, maybe have imgs per sensor and redraw regularly with current data?
 
 ### Peripheral Mgr
 
@@ -119,3 +124,8 @@ how? see: https://wiki.archlinux.org/title/MariaDB
 - [x] AT LEAST things like subscribing to notification should spawn a new thread to only handle that notification stream (should also minimize those panics, since they happen on drop of the messagestream in bluez-async -> if we don't drop it all the time, we can't have panics all the time *insert meme with guy tapping on forehead*)
     - basically, thread is spawned on susbscribe, killed on unsubscribe, listens on notificaiton stream all the time and sends received data to peripheral-mgr main thread
     - YES! works very well! ;)
+- [ ] think about preparing the peripheralmgr to handle different types of sensors
+    - ideally generic, so i can uilize the same base
+    - best option would be to have mgr fully generic
+        and have a trait for peripheral/sensor a la Command/CmdMgr
+    - form a first look, it seems the only sensor-specific functions are read/write because of amount of data.. shouldn't be too hard, but my brain does not work atm
