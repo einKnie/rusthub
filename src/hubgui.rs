@@ -4,7 +4,7 @@
 
 use crate::cmdmgr::CmdMgr;
 use crate::database_mgr::{
-    data::charting,
+    data::{DatabaseEntry, charting},
     database,
     message::{DBCmd, DBResp, DatabaseCmd, DatabaseQuery, DatabaseResp},
 };
@@ -12,7 +12,7 @@ use crate::peripheral_mgr;
 use crate::peripheral_mgr::message::{HubCmd, HubEvent, HubResp, PeripheralCmd, PeripheralMsg};
 
 use btleplug::api::BDAddr;
-use chrono::Local;
+use chrono::{Local, TimeDelta};
 use eframe::egui::global_theme_preference_switch;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -235,7 +235,59 @@ impl MeasureApp {
                 pending: pending_db,
             },
             state: MeasureAppState {
+                #[cfg(not(feature = "test_sensors"))]
                 sensors: Vec::<ConnectedSensor>::new(),
+                #[cfg(feature = "test_sensors")]
+                sensors: Vec::<ConnectedSensor>::from(vec![
+                    ConnectedSensor {
+                        addr: BDAddr::from([0, 1, 2, 3, 4, 1]),
+                        name: SensorName::new("test".to_string()),
+                        last: 0,
+                        subscribed: false,
+                        show: false,
+                        id: 0,
+                    },
+                    ConnectedSensor {
+                        addr: BDAddr::from([0, 1, 2, 3, 4, 2]),
+                        name: SensorName::new("test".to_string()),
+                        last: 0,
+                        subscribed: false,
+                        show: false,
+                        id: 0,
+                    },
+                    ConnectedSensor {
+                        addr: BDAddr::from([0, 1, 2, 3, 4, 3]),
+                        name: SensorName::new("test".to_string()),
+                        last: 0,
+                        subscribed: false,
+                        show: false,
+                        id: 0,
+                    },
+                    ConnectedSensor {
+                        addr: BDAddr::from([0, 1, 2, 3, 4, 4]),
+                        name: SensorName::new("test".to_string()),
+                        last: 0,
+                        subscribed: false,
+                        show: false,
+                        id: 0,
+                    },
+                    ConnectedSensor {
+                        addr: BDAddr::from([0, 1, 2, 3, 4, 5]),
+                        name: SensorName::new("test".to_string()),
+                        last: 0,
+                        subscribed: false,
+                        show: false,
+                        id: 0,
+                    },
+                    ConnectedSensor {
+                        addr: BDAddr::from([0, 1, 2, 3, 4, 6]),
+                        name: SensorName::new("test".to_string()),
+                        last: 0,
+                        subscribed: false,
+                        show: false,
+                        id: 0,
+                    },
+                ]),
             },
         }
     }
@@ -709,6 +761,99 @@ impl eframe::App for MeasureApp {
                         }
                         // update sensors
                         self.state.sensors = sensors.clone();
+                    });
+
+                // Charting sidebar
+                egui::CollapsingHeader::new("Charting")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if ui.button("draw single chart").clicked() {
+                            // testdata
+                            let data: Vec<DatabaseEntry> = vec![
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(10).unwrap(),
+                                    value: 500,
+                                },
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(2 * 10).unwrap(),
+                                    value: 469,
+                                },
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(3 * 10).unwrap(),
+                                    value: 667,
+                                },
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(4 * 10).unwrap(),
+                                    value: 667,
+                                },
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(5 * 10).unwrap(),
+                                    value: 450,
+                                },
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(6 * 10).unwrap(),
+                                    value: 420,
+                                },
+                            ];
+
+                            charting::draw_chart("Test single", data);
+                        }
+
+                        if ui.button("draw charts").clicked() {
+                            // testdata
+                            let data: Vec<DatabaseEntry> = vec![
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(10).unwrap(),
+                                    value: 500,
+                                },
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(30 * 10).unwrap(),
+                                    value: 469,
+                                },
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(31 * 10).unwrap(),
+                                    value: 667,
+                                },
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(32 * 10).unwrap(),
+                                    value: 667,
+                                },
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(50 * 10).unwrap(),
+                                    value: 450,
+                                },
+                                DatabaseEntry {
+                                    sensor_id: 1,
+                                    sensor_name: String::from("t1"),
+                                    ts: Local::now() - TimeDelta::try_seconds(51 * 10).unwrap(),
+                                    value: 420,
+                                },
+                            ];
+
+                            charting::draw_chart("Test", data);
+                        }
                     });
 
                 // General sidebar

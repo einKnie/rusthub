@@ -3,6 +3,10 @@ name = "rusthub"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Adds a bunch of sensors to gui for testing
+test_sensors = []
+
 [dependencies]
 btleplug = { version = "0.12.0", default-features = false }
 chrono = { version = "0.4.44", default-features = false }
