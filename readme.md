@@ -106,6 +106,41 @@ how? see: https://wiki.archlinux.org/title/MariaDB
     - i want to display a generated chart in a window, and the window should stay open until closed
     - ideally, maybe have imgs per sensor and redraw regularly with current data?
 
+#### Ui retained mode
+
+- [ ] try retained-mode gui with [iced](https://docs.rs/iced/latest/iced/index.html)
+    - [ ] BIG TODOS:
+        - [ ] find a way to handle the threads (in a process sense). currently works but does not await thread handles. any attempt so far failed
+        - [ ] disconnect ui logic from thread handling somehow
+
+
+- [ ] new try: slint
+    - looks like i can run the thread handling in a separate thread but call callbacks of the ui from there, thread-safe, see: https://docs.slint.dev/latest/docs/rust/slint/fn.invoke_from_event_loop
+    - worth a try, but setting everything up again is so much tedious work -.-
+    - ok, the main event loop (managers and now also the "ui_mgr") are running in separate threads and do their thing, while the ui sits there. so far, so good. now i need to see how i can affect the ui from the mgr
+    - and also, actually potential major issue -> can i affect the mgrs from the ui this way -> actually, i think i need the whole bidirectional channels for the ui_mgr now, like the others..
+
+##### slint ui
+
+basic functionality is provided, though minimal.
+todos:
+- [x] handle exit. a bit convoluted but it works
+    - interval timer runs and checks if all threads are stopped; when yes a clean_exit signal is sent to main ui
+    - if main ui clean_exit callback is called, we check if exit was in progress, if yes exit of no, warning
+    - on exit button clicked: ui-mgr thread receives stop cmd, which then stops the other mgrs. also starts a backup timer to force kill if not yet stopped after 10 sec
+    - [ ] todo: handle kill signals
+- [ ] handle ui, basically make an actual user interface
+    - basic interface stands, though unstyled
+    - issues with scaling layout since i can't generate a grid dynamically (via for loop) #todo
+- [ ] ui feedback on pending events (i.e. connecting etc..)
+    - actually two topics: general 'in progress' and sensor-specific in-progress
+    - sensor-specific, meaning the connect button should not be clickable while sensor is already connecting
+    - general, meaning show some sort of progress icon while any connecting action (for any sensor) is in pending (just to give some user feddback, especially at startup)
+    - on the other hand, since i have pendng actions per button (SpinnerButton) maybe i can somehow map this
+
+
+
+
 ### Peripheral Mgr
 
 - [x] first automatic connection to peripheral always fails, why?
