@@ -6,15 +6,16 @@
 
 pub mod cmdmgr;
 pub mod database_mgr;
-pub mod hubgui;
 pub mod peripheral_mgr;
+pub mod ui;
 
+// run old hubgui
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    log::info!("Hello world!");
+    log::info!("Hello world with egui!");
 
-    hubgui::run_gui().await;
+    ui::hubgui::run_gui().await;
 
     log::info!("Done!");
 }
