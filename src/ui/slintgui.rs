@@ -52,6 +52,8 @@ enum UiCmd {
     StopThread,
     // delete sensor from database
     DbDeleteSensor(i32),
+    /// fetch data for sensor from db
+    DbGetData(i32),
 }
 
 /// run the slint ui
@@ -196,6 +198,14 @@ pub async fn run_gui() -> u32 {
     ui.on_sensor_read(move |id| {
         log::debug!("reading from sensor");
         tx.send(UiCmd::ReadFrom(id)).unwrap();
+    });
+
+    // ui.on_sensor_read_db
+    // called from frontend
+    let tx = ui_tx.clone();
+    ui.on_sensor_read_db(move |id| {
+        log::debug!("reading from sensor");
+        tx.send(UiCmd::DbGetData(id)).unwrap();
     });
 
     // ui.on_sensor_name
@@ -922,6 +932,12 @@ impl MeasureApp {
                                 let sensor = self.state.ui_sensors.iter().find(|x| x.sensor_id == id);
                                 if let Some(s) = sensor {
                                     self.send_database_command(DBCmd::DeleteSensor(s.db_id));
+                                }
+                            }
+                            UiCmd::DbGetData(id) => {
+                                let sensor = self.state.ui_sensors.iter().find(|x| x.sensor_id == id);
+                                if let Some(s) = sensor {
+                                    self.get_data(s.db_id);
                                 }
                             }
                             UiCmd::FindSensors => {

@@ -92,6 +92,7 @@ component SensorTile inherits Rectangle {
     callback db_changed(int, bool);
     callback blink(int);
     callback read(int);
+    callback read_db(int);
     callback name_change(int, string);
 
     // Popup to change sensor name
@@ -177,6 +178,14 @@ component SensorTile inherits Rectangle {
             }
         }
 
+        SpinnerButton {
+            text: "Read from DB";
+            enabled: true;
+            clicked => {
+                root.read_db(root.component_id);
+            }
+        }
+
         Button {
             text: "Change name";
             enabled: root.state == SensorState.connected;
@@ -220,6 +229,7 @@ export component HubUi inherits Window {
     callback sensor_db(int, bool);
     callback sensor_blink(int);
     callback sensor_read(int);
+    callback sensor_read_db(int);
     callback sensor_name(int, string);
 
     callback ping();
@@ -350,6 +360,9 @@ export component HubUi inherits Window {
                 }
                 read(int) => {
                     root.sensor_read(int);
+                }
+                read_db(int) => {
+                    root.sensor_read_db(int);
                 }
                 name_change(int, string) => {
                     root.sensor_name(int, string);
