@@ -1,0 +1,363 @@
+import {
+    Button,
+    VerticalBox,
+    LineEdit,
+    Spinner,
+    ScrollView,
+    StandardButton,
+} from "std-widgets.slint";
+
+
+export enum SensorState {known, connecting, connected}
+
+struct Sensor {
+    state: SensorState,
+    sensor_id: int,
+    name: string,
+    last: int,
+    subscribed: bool,
+    show: bool,
+    db_id: int,
+}
+
+    // button with optional spinner to show work in progress
+component SpinnerButton inherits Rectangle {
+    in-out property <bool> enabled: true;
+    in-out property <bool> in_progress: false;
+    in-out property <string> text;
+
+    callback clicked <=> button.clicked;
+
+    HorizontalLayout {
+        button := Button {
+            text: root.text;
+            enabled: root.enabled && !root.in_progress;
+            width: !root.in_progress ? 100% : 80%;
+        }
+
+        Spinner {
+            indeterminate: true;
+            visible: root.in_progress;
+            width: !root.in_progress ? 0% : 20%;
+        }
+    }
+}
+
+component WarningPopup inherits PopupWindow {
+    width: 100px;
+    height: 100px;
+
+    close-policy: no-auto-close;
+
+    in property <string> text;
+    callback closed <=> button.clicked;
+
+    Rectangle {
+        // todo set color depending on style
+        background: white;
+
+        VerticalLayout {
+            spacing: 10px;
+            padding: 10px;
+
+            Text {
+                text: root.text;
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                padding: 10px;
+
+                button := StandardButton {
+                    kind: ok;
+                }
+            }
+        }
+    }
+}
+
+component SensorTile inherits Rectangle {
+    width: 200px;
+    height: 200px;
+
+    in-out property <SensorState> state;
+    in-out property <int> component_id;
+    in-out property <string> name;
+    in-out property <int> val;
+    in-out property <bool> subscribed;
+    in-out property <int> db_id;
+
+    callback connect(int, bool);
+    callback subscribe(int, bool);
+    callback db_changed(int, bool);
+    callback blink(int);
+    callback read(int);
+    callback name_change(int, string);
+
+    // Popup to change sensor name
+    name_change_popup := PopupWindow {
+        width: 100px;
+        height: 100px;
+        x: parent.x + (parent.width / 2);
+        y: parent.y + (parent.height / 2);
+
+        close-policy: no-auto-close;
+
+        Rectangle {
+            // todo set color depending on style
+            background: white;
+
+            VerticalLayout {
+                spacing: 10px;
+                padding: 10px;
+
+                Text {
+                    text: "Change name for " + root.name;
+                }
+
+                newname := LineEdit {
+                    text: root.name;
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    padding: 10px;
+
+                    StandardButton {
+                        kind: ok;
+                        clicked => {
+                            root.name_change(root.component_id, newname.text);
+                            name_change_popup.close();
+                        }
+                    }
+
+                    StandardButton {
+                        kind: cancel;
+                        clicked => {
+                            name_change_popup.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    VerticalLayout {
+        Text {
+            text: root.name + " (" + (root.state == SensorState.connected ? root.val : "not connected") + ")";
+            color: black;
+            font-weight: FontWeight.bold;
+        }
+
+        SpinnerButton {
+            text: root.subscribed ? "Unsubscribe" : "Subscribe";
+            enabled: root.state == SensorState.connected;
+            clicked => {
+                // should i do a ui trick and first initiate a read, so there is a first value immediately after subscribing?
+                root.read(root.component_id);
+                root.subscribe(root.component_id, !root.subscribed);
+                self.in_progress = true;
+            }
+        }
+
+        Button {
+            text: "Blink";
+            enabled: root.state == SensorState.connected;
+            clicked => {
+                root.blink(root.component_id);
+            }
+        }
+
+        SpinnerButton {
+            text: "Read Live";
+            enabled: root.state == SensorState.connected;
+            clicked => {
+                self.in_progress = true;
+                root.read(root.component_id);
+            }
+        }
+
+        Button {
+            text: "Change name";
+            enabled: root.state == SensorState.connected;
+            clicked => {
+                name_change_popup.show();
+            }
+        }
+
+        SpinnerButton {
+            text: root.state == SensorState.connected ? "Disconnect" : "Connect";
+            in_progress: root.state == SensorState.connecting;
+            clicked => {
+                root.connect(root.component_id, !(root.state == SensorState.connected));
+                // self.in_progress = true;
+                    // dirty since this is never reset but works b/c sensor is new after connecting changed
+                    // @todo find a better way
+                }
+        }
+
+        Button {
+            text: root.db_id != 0 ? "Delete from DB" : "Add to DB";
+            enabled: root.state == SensorState.known;
+            clicked => {
+                root.db_changed(root.component_id, root.db_id == 0);
+            }
+        }
+    }
+}
+
+export component HubUi inherits Window {
+    in-out property <bool> exit_initiated: false;
+
+    in-out property <[Sensor]> sensors: [];
+
+    callback add_sensor(Sensor);
+    callback remove_sensor(Sensor);
+    callback update_sensor(Sensor);
+
+    callback sensor_connect(int, bool);
+    callback sensor_subscribe(int, bool);
+    callback sensor_db(int, bool);
+    callback sensor_blink(int);
+    callback sensor_read(int);
+    callback sensor_name(int, string);
+
+    callback ping();
+    callback blink_all();
+    callback find_sensors();
+    callback connect_all();
+    callback disconnect_all();
+    callback close_button();
+
+    callback stop_condition();
+    callback sensor_mgr_stopped();
+    callback db_mgr_stopped();
+
+    property <bool> sensor_mgmt: true;
+    property <bool> db_mgmt: true;
+
+    sensor_mgmt_stopped_warning := WarningPopup {
+        x: parent.x + (parent.width / 2) - (self.width / 2);
+        y: parent.y + (parent.height / 2) - (self.height / 2);
+
+        text: "The Sensor management thread has run into an issue. Check your bluetooth adapter status.";
+        closed => {
+            // invoke close_button callback to stop other threads and close ui
+            close_button();
+        }
+    }
+
+    db_mgmt_stopped_warning := WarningPopup {
+        x: parent.x + (parent.width / 2) - (self.width / 2);
+        y: parent.y + (parent.height / 2) - (self.height / 2);
+
+        text: "The Database management thread has run into an issue. Check your database server status.";
+        closed => {
+            // invoke close_button callback to stop other threads and close ui
+            close_button();
+        }
+    }
+
+    sensor_mgr_stopped => {
+        if self.sensor_mgmt {
+            self.sensor_mgmt = false;
+            sensor_mgmt_stopped_warning.show();
+        }
+    }
+
+    db_mgr_stopped => {
+        if self.sensor_mgmt {
+            self.sensor_mgmt = false;
+            db_mgmt_stopped_warning.show();
+        }
+    }
+
+    VerticalLayout {
+        spacing: 5px;
+
+        // top bar
+        HorizontalLayout {
+            padding: 5px;
+            spacing: 5px;
+
+            height: 40px;
+
+            Button {
+                text: "Ping";
+                clicked => root.ping();
+            }
+
+            Button {
+                text: "Find Sensors";
+                clicked => root.find_sensors();
+            }
+
+            Button {
+                text: "Connect all";
+                clicked => root.connect_all();
+            }
+
+            Button {
+                text: "Exit";
+                clicked => {
+                    if !root.exit_initiated {
+                        root.close_button();
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding: 5px;
+            spacing: 5px;
+
+            height: 40px;
+
+            for sensor[i] in sensors: Button {
+                text: sensor.name;
+                primary: sensor.show;
+                clicked => {
+                    sensor.show = !sensor.show;
+                }
+            }
+        }
+
+        // sensors
+        HorizontalLayout {
+            padding: 5px;
+            spacing: 10px;
+
+            // todo: this does not scale
+            // horizontalLayout is (as the name implies) horizontal-only, and the gridlayout does not seem to support loops,
+            // i'd have to define rowns and columns dynamically (which afaik i can only do from rust code), which is absurd.
+            for sensor[i] in sensors: SensorTile {
+                state: sensor.state;
+                component_id: sensor.sensor_id;
+                name: sensor.name;
+                val: sensor.last;
+                subscribed: sensor.subscribed;
+                db_id: sensor.db_id;
+                visible: sensor.show;
+
+                subscribe(int, bool) => {
+                    root.sensor_subscribe(int, bool);
+                }
+                db_changed(int, bool) => {
+                    root.sensor_db(int, bool);
+                }
+                blink(int) => {
+                    root.sensor_blink(int);
+                }
+                read(int) => {
+                    root.sensor_read(int);
+                }
+                name_change(int, string) => {
+                    root.sensor_name(int, string);
+                }
+                connect(int, bool) => {
+                    root.sensor_connect(int, bool);
+                }
+            }
+        }
+    }
+}
