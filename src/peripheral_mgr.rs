@@ -478,6 +478,25 @@ pub mod bt_peripheral {
                     }
                 }
 
+                HubCmd::ForgetSensor(addr) => {
+                    log::debug!("removing peripheral from internal list");
+                    // remove peripheral from internal list
+                    let removed = self.sensors
+                            .extract_if(.., |x| x.addr() == addr)
+                            .collect::<Vec<_>>();
+                    if removed.len() == 1 {
+                        self.tx
+                                .send(PeripheralMsg::Response(cmd.id, HubResp::Success))
+                                .unwrap();
+                    } else {
+                        log::debug!("none or more than one sensor found to be removed in internal sensors list");
+                        self.tx
+                                .send(PeripheralMsg::Response(cmd.id, HubResp::Failed))
+                                .unwrap();
+                    }
+
+                }
+
                 HubCmd::Connect(addr) => {
                     log::info!("connecting to peripheral ({addr:?})");
 

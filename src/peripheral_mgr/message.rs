@@ -75,6 +75,8 @@ pub enum HubCmd {
     BlinkAll,
     /// stop the PeripheralMgr thread
     StopThread,
+    /// forget a known sensor
+    ForgetSensor(BDAddr),
 }
 
 /// PeripheralCmd
