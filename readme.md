@@ -74,6 +74,34 @@ how? see: https://wiki.archlinux.org/title/MariaDB
     - [x] use THIS: https://lib.rs/crates/sqlx
         - also to read: https://kerkour.com/rust-postgres-everything
 
+#### sensor identification
+
+    - would like a good way to identify sensors by something other than their hw addr
+    - unique id given to sensor when first ...what? found/added to database?
+    - in that scenario, peripheral-mgr would need to handle the translation layer from hwaddr to unique id internally
+
+what do we have?
+when sensor is detected by bt adapter -> give unique id?
+but db must know if sensor is already known, otherwise we cannot recognize it. so we must have some unique value
+- if i just use BDAddr converted to u64 as the unique id overall?
+    - for sure easier (and more generic) to use u64 than BDAddr
+    - but in that case i need a fn to convert back to BDAddr first
+        - i have that now, but: not sure if i want it
+        - since the db *must* known some actually uniquer identifier, the addr converted to u64 is good for db identification.
+- but i cannot store a u64 in the (slint) ui struct -.-
+    - so i would e.g. have to add sensor to db with addr as u64 but use e.g. db_id for identification program-wide.
+        - this requires that all sensors are in database
+            - which is actually a reasonable requirement (sensor is useless (in terms of this app) without the database)
+        - but in that case peripheralmgr must have a way to translate back to addr, which defeats the point. peripheral and db mgrs should be independent from each other
+
+
+
+### Database
+
+- [ ] fetch list of known sensors on startup, give to gui, but unconnected
+- [ ] when sensor is deleted from database, it should be removed from gui as well
+    - [ ] make "delete from db" button only available when sensor is disconnected
+    - [ ] removing from db should also trigger removing from periph?
 
 ### UI
 
@@ -114,7 +142,7 @@ how? see: https://wiki.archlinux.org/title/MariaDB
         - [ ] disconnect ui logic from thread handling somehow
 
 
-- [ ] new try: slint
+- [x] new try: slint
     - looks like i can run the thread handling in a separate thread but call callbacks of the ui from there, thread-safe, see: https://docs.slint.dev/latest/docs/rust/slint/fn.invoke_from_event_loop
     - worth a try, but setting everything up again is so much tedious work -.-
     - ok, the main event loop (managers and now also the "ui_mgr") are running in separate threads and do their thing, while the ui sits there. so far, so good. now i need to see how i can affect the ui from the mgr
@@ -128,7 +156,8 @@ todos:
     - interval timer runs and checks if all threads are stopped; when yes a clean_exit signal is sent to main ui
     - if main ui clean_exit callback is called, we check if exit was in progress, if yes exit of no, warning
     - on exit button clicked: ui-mgr thread receives stop cmd, which then stops the other mgrs. also starts a backup timer to force kill if not yet stopped after 10 sec
-    - [ ] todo: handle kill signals
+    - [x] todo: handle kill signals
+        - have added a callback handler when the main window is closed
 - [ ] handle ui, basically make an actual user interface
     - basic interface stands, though unstyled
     - issues with scaling layout since i can't generate a grid dynamically (via for loop) #todo
@@ -137,6 +166,8 @@ todos:
     - sensor-specific, meaning the connect button should not be clickable while sensor is already connecting
     - general, meaning show some sort of progress icon while any connecting action (for any sensor) is in pending (just to give some user feddback, especially at startup)
     - on the other hand, since i have pendng actions per button (SpinnerButton) maybe i can somehow map this
+- [x] generate sensor_id from atomic counter
+    - but this actually maps back to general todos: sensor identification
 
 
 
@@ -147,6 +178,8 @@ todos:
     - solved: on discover, peripheral was not added ot the list and when hub requested connect, the peripheral was therefore not found; fixed now
 - [x] sensor data arrives wrong! (endianness?) - not anymore
 - [ ] identify peripheral by id instead of hwAddr
+    - [ ] move sensor_id handling to peripheral_mgr and communicate with the outside only via id
+        - basically, when peripheral-mgr finds a new peripheral, a unique id should be given and provided instead of the address
 - [ ] (maybe) split HubMsg into two enums (flow ctrl & commands)
 - [x] improve errors
 - [x] try to find out how to improve ble notification handling (some bluez thread (not my sources) keeps panicking from time to time)
