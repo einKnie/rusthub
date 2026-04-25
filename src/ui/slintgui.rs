@@ -3,7 +3,7 @@
 // unfortuneataly need this for the slint! macro, unreadable otherwise
 #![allow(missing_docs)]
 
-use crate::cmdmgr::CmdMgr;
+use crate::cmdmgr::{Command, CmdMgr};
 use crate::database_mgr::{
     data::charting,
     database,
@@ -15,10 +15,12 @@ use btleplug::api::BDAddr;
 use chrono::Local;
 use std::collections::HashMap;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use slint;
 use slint::Model;
 use slint::run_event_loop_until_quit;
+use slint::CloseRequestResponse;
 
 slint::include_modules!();
 
@@ -44,52 +46,74 @@ enum UiCmd {
     Blink(i32),
     /// Blink all connected sensors
     BlinkAll,
-
+    /// update sensor name (ui -> mgr)!
     UpdateName(i32, String),
     /// stop the PeripheralMgr thread
     StopThread,
+    // delete sensor from database
+    DbDeleteSensor(i32),
 }
 
 /// run the slint ui
+/// tbh not sure how i can structure this to be less spaghetti
 pub async fn run_gui() -> u32 {
-    // start peripheral manager
+    // HubUi is generated (in build.rs) from 'sensorui.slint'
+    let ui = HubUi::new().unwrap();
+
+    //
+    // 1. START MANAGER THREADS
+    // Initially, i thought this only works by starting the threads with slint::spawn_local,
+    // but this runs the code within the main thread event loop, which means a panic in a mgr
+    // (e.g. db_mgr when database server is not running)
+    // will actually crash the main thread. So this is not feasible.
+    // turns out that it works with tokio, although now i'm not sure what the initial issue was.
+    // could still be that i need the async_compat, but for now let's see, so far it works without
+
+    // spawn peripheral manager
     let (periph_tx, thread_periph_rx) = unbounded_channel();
     let (thread_periph_tx, periph_rx) = unbounded_channel();
-    let mgr_handle = slint::spawn_local(async_compat::Compat::new(peripheral_mgr::mgr_run(
-        thread_periph_tx,
-        thread_periph_rx,
-    )))
-    .unwrap();
+    let mgr_handle = tokio::spawn(peripheral_mgr::mgr_run(thread_periph_tx, thread_periph_rx));
 
     // spawn database manager
     let (db_tx, thread_db_rx) = unbounded_channel();
     let (thread_db_tx, db_rx) = unbounded_channel();
-    let db_handle = slint::spawn_local(async_compat::Compat::new(database::mgr_run(
-        thread_db_tx,
-        thread_db_rx,
-    )))
-    .unwrap();
+    let db_handle = tokio::spawn(database::mgr_run(thread_db_tx, thread_db_rx));
 
-    // new Ui
-    let ui = HubUi::new().unwrap();
-
-    // start ui manager
+    // spawn ui manager
     let (ui_tx, ui_thread_rx) = unbounded_channel();
     let weak_ui = ui.as_weak();
-    let ui_handle = slint::spawn_local(async_compat::Compat::new(ui_mgr_run(
+    let ui_handle = tokio::spawn(ui_mgr_run(
         (periph_tx, periph_rx),
         (db_tx, db_rx),
         weak_ui,
         ui_thread_rx,
-    )))
-    .unwrap();
+    ));
+
+    //
+    // 2. DEFINE UI CALLBACKS
+    //
 
     // ui.on_add_sensor
     // called from backend
     let weak_ui = ui.as_weak();
     ui.on_add_sensor(move |sensor| {
+        log::debug!("add_sensor callback called: {sensor:?}");
         let mut current_sensors: Vec<Sensor> = weak_ui.unwrap().get_sensors().iter().collect();
         current_sensors.push(sensor);
+        let model = std::rc::Rc::new(slint::VecModel::from(current_sensors));
+        weak_ui.unwrap().set_sensors(model.into());
+    });
+
+    // ui.on_remove_sensor
+    // called from backend
+    let weak_ui = ui.as_weak();
+    ui.on_remove_sensor(move |sensor| {
+        log::debug!("remove_sensor callback called: {sensor:?}");
+        let mut current_sensors: Vec<Sensor> = weak_ui.unwrap().get_sensors().iter().collect();
+        let removed = current_sensors
+                        .extract_if(.., |x| x.sensor_id == sensor.sensor_id)
+                        .collect::<Vec<_>>();
+        log::info!("Removed from UI: {removed:?}");
         let model = std::rc::Rc::new(slint::VecModel::from(current_sensors));
         weak_ui.unwrap().set_sensors(model.into());
     });
@@ -117,11 +141,23 @@ pub async fn run_gui() -> u32 {
     // called from frontend
     let tx = ui_tx.clone();
     ui.on_sensor_subscribe(move |id, val| {
-        log::debug!("subscribing to sensor");
         if val {
             tx.send(UiCmd::Subscribe(id)).unwrap();
+            log::debug!("subscribing to sensor");
         } else {
             tx.send(UiCmd::Unsubscribe(id)).unwrap();
+            log::debug!("unsubscribing from sensor");
+        }
+    });
+
+    // ui.on_sensor_db
+    // called from frontend
+    let tx = ui_tx.clone();
+    ui.on_sensor_db(move |id, val| {
+        log::debug!("changing database status for sensor");
+        if !val {
+            // only delete; sensors are added to db automatically when found
+            tx.send(UiCmd::DbDeleteSensor(id)).unwrap();
         }
     });
 
@@ -170,26 +206,62 @@ pub async fn run_gui() -> u32 {
         tx.send(UiCmd::UpdateName(id, name.to_string())).unwrap();
     });
 
-    // ui.on_close
-    //
+    // ui.on_find_sensors
+    // called from frontend
     let tx = ui_tx.clone();
-    let weak_ui = ui.as_weak();
-    ui.on_close_button(move || {
-        // this only tells ui-mgr thread to stop
-        // which in turn sends stop signal to other mgrs
-        // a repeated timer is running alongside all of this, which triggers
-        // an event/callback if all manager threads have stopped.
-        // in the callback, we check if
-        log::debug!("ui stopped, sending stop to managers");
-        tx.send(UiCmd::StopThread).unwrap();
-        let _ = weak_ui.unwrap().hide();
-
-        // backup timer to hard stop if threads are not finished after 10 secs
-        slint::Timer::single_shot(std::time::Duration::from_secs(10), move || {
-            log::warn!("threads did not stop after 10 sec");
-            slint::quit_event_loop().unwrap();
-        });
+    ui.on_find_sensors(move || {
+        log::debug!("ui find sensors");
+        tx.send(UiCmd::FindSensors).unwrap();
     });
+
+    // ui.on_connect_all
+    // called from frontend
+    let tx = ui_tx.clone();
+    ui.on_connect_all(move || {
+        log::debug!("ui find sensors");
+        tx.send(UiCmd::ConnectAll).unwrap();
+    });
+
+    //
+    // 3. DEFINE FN & CALLBACKS FOR UI CLEAN EXIT
+    //
+
+    // repeating timer to handle the other thread handles
+    let weak_ui = ui.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(500),
+        move || {
+            let periph = mgr_handle.is_finished();
+            let db = db_handle.is_finished();
+            let ui = ui_handle.is_finished();
+
+            let slint_ui = weak_ui.unwrap();
+
+            if periph && db && ui {
+                slint_ui.invoke_stop_condition();
+            }
+            // i'm thinking about handling other cases here as well: warning to user when any thread has stopped,
+            // e.g. database manager has run into an issue, so there won't be db access.
+            // but is this sound design? how do i communicate this from here? easiest would be with additional cllbacks of course,
+            // but i'm not well versed enought in gui-development to know if this is how these things are done..
+
+            else {
+                if periph {
+                    log::warn!("perpheral manager thread has stopped");
+                    slint_ui.invoke_sensor_mgr_stopped();
+                }
+                if db {
+                    log::warn!("database manager thread has stopped");
+                    slint_ui.invoke_db_mgr_stopped();
+                }
+                if ui {
+                    log::warn!("ui manager thread has stopped");
+                }
+            }
+        },
+    );
 
     // ui.on_stop_condition
     let weak_ui = ui.as_weak();
@@ -204,20 +276,41 @@ pub async fn run_gui() -> u32 {
         }
     });
 
-    // task/thread to handle the other thread handles
-    // but how do i make it run without returning it here?
+    // ui.on_close
+    // called from frontend
+    let tx = ui_tx.clone();
     let weak_ui = ui.as_weak();
-    let timer = slint::Timer::default();
-    timer.start(
-        slint::TimerMode::Repeated,
-        std::time::Duration::from_millis(500),
-        move || {
-            if mgr_handle.is_finished() && db_handle.is_finished() && ui_handle.is_finished() {
-                let ui = weak_ui.unwrap();
-                ui.invoke_stop_condition();
-            }
-        },
-    );
+    ui.on_close_button(move || {
+        // this only tells ui-mgr thread to stop
+        // which in turn sends stop signal to other mgrs
+        // the repeated timer running alongside all of this triggers
+        // an event/callback if all manager threads have stopped.
+        // in the callback, we check if closing is in progress
+        // and if yes: exit
+        log::debug!("ui stopped, sending stop to managers");
+        tx.send(UiCmd::StopThread).unwrap();
+
+        weak_ui.unwrap().set_exit_initiated(true);
+        let _ = weak_ui.unwrap().hide();
+
+        // backup timer to hard stop if threads are not finished after 10 secs
+        slint::Timer::single_shot(std::time::Duration::from_secs(10), move || {
+            log::warn!("threads did not stop after 10 sec");
+            slint::quit_event_loop().unwrap();
+        });
+    });
+
+    let weak_ui = ui.as_weak();
+    ui.window().on_close_requested(move || {
+        // set the callback in case the main window is closed not via the close-button
+        log::debug!("main ui window closed");
+        weak_ui.unwrap().invoke_close_button();
+        CloseRequestResponse::HideWindow
+    });
+
+    //
+    // 4. RUN
+    //
 
     // run the ui
     // use run_event_loop_until_quit so we can hide the window while waiting for threads to stop
@@ -251,7 +344,29 @@ async fn ui_mgr_run(
     0
 }
 
+/////////////////////////////////////////////////////////////////
+/////////////////////// MeasureApp //////////////////////////////
+/////////////////////////////////////////////////////////////////
+
+/// UniqueCounter
+///
+/// Helper to supply unique ids for newly-detected sensors
+struct UniqueCounter {
+}
+
+impl UniqueCounter {
+    /// provide next unique id
+    pub fn next() -> u16 {
+        static CNT: AtomicU16 = AtomicU16::new(1);
+
+        CNT.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
 /// App state
+///
+/// contains a vector of known sensors,
+/// as well as a map from the ui-based sensor_id to the peripheral address
 #[derive(Clone, Debug)]
 struct MeasureAppState {
     ui_sensors: Vec<Sensor>,
@@ -320,7 +435,12 @@ impl MeasureApp {
     /// This also adds the command to the pending database actions
     fn send_database_command(&mut self, cmd: DBCmd) {
         let cmd = self.database.pending.add(DatabaseCmd::new(cmd));
-        self.database.tx.send(cmd).unwrap();
+        match self.database.tx.send(cmd) {
+            Ok(_) => (),
+            Err(e) => {
+                log::warn!("failed to send db cmd: {e}");
+            }
+        }
     }
 
     /// Send Command to the Peripheral manager
@@ -328,7 +448,12 @@ impl MeasureApp {
     /// This also adds the command to the pending peripheral actions
     fn send_peripheral_command(&mut self, cmd: HubCmd) {
         let cmd = self.peripheral.pending.add(PeripheralCmd::new(cmd));
-        self.peripheral.tx.send(cmd).unwrap();
+        match self.peripheral.tx.send(cmd) {
+            Ok(_) => (),
+            Err(e) => {
+                log::warn!("failed to send peripheral cmd: {e}");
+            }
+        }
     }
 
     /// Print debug info
@@ -346,8 +471,7 @@ impl MeasureApp {
     /// Connect to sensor
     fn connect(&mut self, addr: BDAddr) {
         log::info!("connecting to sensor");
-        let ui = self.ui.clone();
-        let _ = slint::invoke_from_event_loop(move || ui.unwrap().invoke_connect_add());
+        self.update_sensor_state(addr, SensorState::Connecting);
         self.send_peripheral_command(HubCmd::Connect(addr));
     }
 
@@ -364,12 +488,13 @@ impl MeasureApp {
         self.send_database_command(DBCmd::StopThread);
     }
 
-    /// Updates a sensor value
+    /// Update a sensor data value
     ///
     /// set the value of the sensor to new value,
     /// if the sensor is in the DB, store value in DB
     /// and lastly update sensor in UI
     fn update_sensor_value(&mut self, addr: BDAddr, data: i32) {
+        log::debug!("update sensor value");
         if let Some(id) = self.state.sensor_map.get(&addr) {
             let sensor = match self
                 .state
@@ -378,7 +503,7 @@ impl MeasureApp {
                 .find(|s| s.sensor_id == *id)
             {
                 Some(s) => {
-                    s.last = data as i32;
+                    s.last = data;
                     Some(s.clone())
                 }
                 None => None,
@@ -401,16 +526,42 @@ impl MeasureApp {
         }
     }
 
-    /// Updates a sensor connection value
+    /// Update a sensor state
+    fn update_sensor_state(&mut self, addr: BDAddr, state: SensorState) {
+        if let Some(id) = self.state.sensor_map.get(&addr) {
+            let sensor = match self
+                .state
+                .ui_sensors
+                .iter_mut()
+                .find(|s| s.sensor_id == *id)
+            {
+                Some(s) => {
+                    s.state = state;
+                    Some(s.clone())
+                }
+                None => None,
+            };
+
+            if let Some(s) = sensor {
+                let ui = self.ui.clone();
+                let _ = slint::invoke_from_event_loop(move || ui.unwrap().invoke_update_sensor(s));
+            }
+        } else {
+            log::debug!("did not find sensor for updating: {addr:?}");
+            dbg!(&self.state.ui_sensors);
+        }
+    }
+
+    /// Update a sensor connection value
     ///
     /// set the value of the sensor to new value,
     /// if the sensor is in the DB, store value in DB
     /// and lastly update sensor in UI
-    fn update_sensor_connected(
+    /// @todo update, don't really need 'connected' anymore due to state
+    fn update_sensor_subscribed(
         &mut self,
         addr: BDAddr,
-        connected: Option<bool>,
-        subscribed: Option<bool>,
+        subscribed: bool,
     ) {
         if let Some(id) = self.state.sensor_map.get(&addr) {
             let sensor = match self
@@ -420,12 +571,7 @@ impl MeasureApp {
                 .find(|s| s.sensor_id == *id)
             {
                 Some(s) => {
-                    if let Some(connected) = connected {
-                        s.connected = connected;
-                    }
-                    if let Some(subscibed) = subscribed {
-                        s.subscribed = subscibed;
-                    }
+                    s.subscribed = subscribed;
                     Some(s.clone())
                 }
                 None => None,
@@ -482,6 +628,24 @@ impl MeasureApp {
         }
     }
 
+    /// get btlpeplug's BDAddr from u64
+    ///
+    /// works, but i need to find a use/place for it
+    fn addr_from_id(id: u64) -> BDAddr {
+        let bytes: [u8;6] = {
+            let id_bytes = id.to_be_bytes();
+
+            [id_bytes[2],
+            id_bytes[3],
+            id_bytes[4],
+            id_bytes[5],
+            id_bytes[6],
+            id_bytes[7]]
+        };
+
+        BDAddr::from(bytes)
+    }
+
     /// run thread comms
     async fn run(&mut self) -> i8 {
         loop {
@@ -497,13 +661,19 @@ impl MeasureApp {
                                 HubEvent::DeviceDiscovered(addr) => {
                                     log::info!("Device Discovered: {addr:?}");
                                     let sensorname = format!("Sensor {:?}", self.state.ui_sensors.len() + 1);
-                                    let sensor_id: i32 = self.state.ui_sensors.len() as i32;
+                                    let sensor_id: i32 = UniqueCounter::next() as i32;
 
+                                    // debug code, todo: remove
+                                    let derived_id = u64::from(addr);
+                                    let derived_addr = MeasureApp::addr_from_id(derived_id);
+                                    log::debug!("### original addr: {addr:?}; id: {derived_id}, derived addr: {derived_addr:?})");
+
+                                    // add sensor in state 'connecting' b/c we start connecting automatically
                                     let sens = Sensor {
+                                        state: SensorState::Connecting,
                                         sensor_id,
                                         name: sensorname.clone().into(),
                                         last: 0,
-                                        connected: false,
                                         subscribed: false,
                                         show: false,
                                         db_id: 0
@@ -531,17 +701,12 @@ impl MeasureApp {
                                 }
                                 HubEvent::DeviceConnected(addr) => {
                                     log::info!("Async Device Connected: {addr:?}");
-
-                                    let ui = self.ui.clone();
-                                    let _ = slint::invoke_from_event_loop(move || ui.unwrap().invoke_connect_del());
-
-                                    self.update_sensor_connected(addr, Some(true), None);
-
-
+                                    self.update_sensor_state(addr, SensorState::Connected);
                                 }
                                 HubEvent::DeviceDisconnected(addr) => {
                                     log::info!("Async Device Disconnected: {addr:?}");
-                                    self.update_sensor_connected(addr, Some(false), Some(false));
+                                    self.update_sensor_subscribed(addr, false);
+                                    self.update_sensor_state(addr, SensorState::Known);
                                 }
                             };
                         }
@@ -559,6 +724,23 @@ impl MeasureApp {
                                     log::debug!(
                                         "received matching response type for command: {cmd:?} => {val:?}"
                                     );
+
+                                    // todo: fix this, this is too much, but it looks like i might need it?
+                                    match (cmd.msg(), val.clone()) {
+                                        (HubCmd::Connect(addr),HubResp::Success) => {
+                                            self.update_sensor_state(addr, SensorState::Connected);
+                                        }
+                                        (HubCmd::Connect(addr),HubResp::Failed) => {
+                                            self.update_sensor_state(addr, SensorState::Known);
+                                        }
+                                        (HubCmd::Disconnect(addr),HubResp::Success) => {
+                                            self.update_sensor_state(addr, SensorState::Known);
+                                        }
+                                        (HubCmd::Disconnect(addr),HubResp::Failed) => {
+                                            self.update_sensor_state(addr, SensorState::Connected);
+                                        }
+                                        (_,_) => ()
+                                    }
                                 } else {
                                     log::warn!(
                                         "received invalid response type for command: {cmd:?} => {val:?}"
@@ -633,15 +815,31 @@ impl MeasureApp {
 
                                 }
                                 DBResp::SensorDeleted(id) => {
+                                    log::debug!("sensor deleted from database");
 
-                                    let mut sensor_id = 0;
-                                    if let Some(s) = self.state.ui_sensors.iter_mut().find(|s| s.db_id == id) {
-                                        s.db_id = 0;
-                                        sensor_id = s.sensor_id;
-                                    }
+                                    let removed = self.state.ui_sensors
+                                        .extract_if(.., |x| x.db_id == id)
+                                        .collect::<Vec<_>>();
 
-                                    if let Some(addr) = self.addr(sensor_id) {
-                                        self.update_sensor_name_and_id(addr, None, Some(0));
+                                    let sensor = match removed.len() {
+                                        0 => {
+                                            log::debug!("deleted sensor not found in internal sensors list");
+                                            None
+                                        }
+                                        1 => removed.first().cloned(),
+                                        _ => {
+                                            log::debug!("more than one sensor found disconnected in internal sensors list");
+                                            None
+                                        }
+                                    };
+
+                                    if let Some(s) = sensor {
+                                        if let Some(addr) = self.addr(s.sensor_id) {
+                                            self.send_peripheral_command(HubCmd::ForgetSensor(addr));
+                                        }
+                                        // remove sensor altogether
+                                        let ui = self.ui.clone();
+                                        let _ = slint::invoke_from_event_loop(move || ui.unwrap().invoke_remove_sensor(s));
                                     }
                                 }
                                 DBResp::SensorId(a, id) => {
@@ -655,8 +853,6 @@ impl MeasureApp {
                                     } else {
                                         log::debug!("Sensor not found for id change");
                                     }
-
-
                                 }
                                 DBResp::Success => (),
                                 DBResp::Failed => (),
@@ -672,6 +868,7 @@ impl MeasureApp {
                     }
                 }
 
+                // handle UI commands
                 res = self.main_rx.recv() => {
                     if let Some(msg) = res {
                         match msg {
@@ -693,6 +890,7 @@ impl MeasureApp {
                             UiCmd::Disconnect(id)=> {
                                 if let Some(addr) = self.addr(id) {
                                     log::debug!("ui mgr received Disconnect({addr:?}) command");
+                                    self.update_sensor_state(addr, SensorState::Connecting);
                                     self.send_peripheral_command(HubCmd::Disconnect(addr));
                                 }
                             }
@@ -703,14 +901,14 @@ impl MeasureApp {
                             UiCmd::Subscribe(id)=> {
                                 if let Some(addr) = self.addr(id) {
                                     self.send_peripheral_command(HubCmd::Subscribe(addr));
-                                    self.update_sensor_connected(addr, None, Some(true));
+                                    self.update_sensor_subscribed(addr, true);
                                     log::debug!("ui mgr received Subscribe({addr:?}) command");
                                 }
                             }
                             UiCmd::Unsubscribe(id)=> {
                                 if let Some(addr) = self.addr(id) {
                                     self.send_peripheral_command(HubCmd::Unsubscribe(addr));
-                                    self.update_sensor_connected(addr, None, Some(false));
+                                    self.update_sensor_subscribed(addr, false);
                                     log::debug!("ui mgr received Unsubscribe({addr:?}) command");
                                 }
                             }
@@ -718,6 +916,12 @@ impl MeasureApp {
                                 if let Some(addr) = self.addr(id) {
                                     self.send_peripheral_command(HubCmd::ReadFrom(addr));
                                     log::debug!("ui mgr received Subscribe({addr:?}) command");
+                                }
+                            }
+                            UiCmd::DbDeleteSensor(id) => {
+                                let sensor = self.state.ui_sensors.iter().find(|x| x.sensor_id == id);
+                                if let Some(s) = sensor {
+                                    self.send_database_command(DBCmd::DeleteSensor(s.db_id));
                                 }
                             }
                             UiCmd::FindSensors => {
@@ -737,8 +941,6 @@ impl MeasureApp {
                             UiCmd::UpdateName(id, name) => {
                                 // sensor name is changed from UI
                                 log::debug!("ui mgr received update name command");
-                                // update sensor in vec
-                                // update database entry
                                 let sensor =  match self.state.ui_sensors.iter_mut().find(|s| s.sensor_id == id) {
                                     Some(s) => {
                                         s.name = name.into();
@@ -747,8 +949,10 @@ impl MeasureApp {
                                     None => None
                                 };
                                 if let Some(s) = sensor {
+                                    // update database entry
                                     self.send_database_command(DBCmd::UpdateSensor(s.db_id, s.name.to_string()));
-                                    // also update sensor name here
+
+                                    // update sensor in ui
                                     let ui = self.ui.clone();
                                     let _ = slint::invoke_from_event_loop(move || ui.unwrap().invoke_update_sensor(s));
                                 }
@@ -766,6 +970,91 @@ impl MeasureApp {
         0
     }
 
+    fn handle_peripheral_response(&mut self, cmd: HubCmd, resp: HubResp) -> bool {
+        match (cmd,resp) {
+            (HubCmd::Ping, _) => (),
+
+            (HubCmd::FindSensors, HubResp::Failed) => {
+                log::debug!("FindSensors failed");
+            }
+            (HubCmd::FindSensors, HubResp::Success) => {
+                log::debug!("FindSensors succeeded");
+            }
+
+            (HubCmd::Connect(a), HubResp::Failed) => {
+                log::debug!("Connect to sensor ({a:?} failed");
+            }
+            (HubCmd::Connect(a), HubResp::Success) => {
+                log::debug!("Connect to sensor ({a:?} succeeded");
+            }
+
+            (HubCmd::ConnectAll, HubResp::Failed) => {
+                log::debug!("Connecting to all sensors failed");
+            }
+            (HubCmd::ConnectAll, HubResp::Success) => {
+                log::debug!("Connecting to all sensors succeeded");
+            }
+
+            (HubCmd::Disconnect(a), HubResp::Failed) => {
+                log::debug!("Disconnect from sensor ({a:?} failed");
+            }
+            (HubCmd::Disconnect(a), HubResp::Success) => {
+                log::debug!("Disconnect from sensor ({a:?} succeeded");
+            }
+
+            (HubCmd::Subscribe(a), HubResp::Failed) => {
+                log::debug!("Subscribe to sensor ({a:?} failed");
+            }
+            (HubCmd::Subscribe(a), HubResp::Success) => {
+                log::debug!("Subscribe to sensor ({a:?} succeeded");
+            }
+
+            (HubCmd::Unsubscribe(a), HubResp::Failed) => {
+                log::debug!("Unsubscibe from sensor ({a:?} failed");
+            }
+            (HubCmd::Unsubscribe(a), HubResp::Success) => {
+                log::debug!("Unsubscribe from sensor ({a:?} succeeded");
+            }
+
+            (HubCmd::ReadFrom(a), HubResp::Failed) => {
+                log::debug!("Read from sensor ({a:?} failed");
+            }
+            (HubCmd::ReadFrom(a), HubResp::ReadData(_,_)) => {
+                log::debug!("Read from sensor ({a:?} succeeded");
+            }
+
+            (HubCmd::Blink(a), HubResp::Failed) => {
+                log::debug!("Blink sensor ({a:?} failed");
+            }
+            (HubCmd::Blink(a), HubResp::Success) => {
+                log::debug!("Blink sensor ({a:?} succeeded");
+            }
+
+            (HubCmd::BlinkAll, HubResp::Failed) => {
+                log::debug!("Blinking all sensors failed");
+            }
+            (HubCmd::BlinkAll, HubResp::Success) => {
+                log::debug!("Blinking to all sensors succeeded");
+            }
+
+            (HubCmd::ForgetSensor(a), HubResp::Failed) => {
+                log::debug!("Forgetting sensor ({a:?} failed");
+            }
+            (HubCmd::ForgetSensor(a), HubResp::Success) => {
+                log::debug!("Forgetting sensor ({a:?} succeeded");
+            }
+
+            (HubCmd::StopThread, _) => (),
+
+            (c,r) => {
+                log::debug!("Invalid response received for command: {c:?} => {r:?}");
+            }
+
+        };
+
+        true
+    }
+
     /// Find sensor peripheral address from ui id
     fn addr(&self, id: i32) -> Option<BDAddr> {
         self.state
@@ -775,6 +1064,7 @@ impl MeasureApp {
             .copied()
     }
 
+    /// Find sensor id from peripheral address
     fn id(&self, addr: BDAddr) -> Option<i32> {
         self.state.sensor_map.get(&addr).copied()
     }
